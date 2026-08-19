@@ -1,6 +1,7 @@
 import type { Database } from "@/lib/db";
 
 import { db } from "@/lib/db";
+import { isDemoMode } from "@/lib/config";
 import { nowIso } from "@/lib/format";
 import type { Incident, IncidentEvent, Severity } from "@/lib/types";
 
@@ -23,23 +24,44 @@ export interface IncidentFull extends Incident {
   hypotheses: HypothesisRow[];
   runs: RunRow[];
   plan: PlanWithActions | null;
+  executions: ExecutionRow[];
+}
+
+export interface ExecutionRow {
+  id: string;
+  incident_id: string;
+  plan_id: number;
+  action_id: number | null;
+  actor: string;
+  actor_id: string | null;
+  status: string;
+  provider: string;
+  result: string | null;
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
 }
 
 export interface EvidenceRow {
   id: number;
   incident_id: string;
+  run_id: number | null;
   source: string;
+  source_type: string | null;
   title: string;
   observation: string;
   relevance: string;
   confidence: number;
   timestamp: string;
+  service: string | null;
+  environment: string | null;
   data: string | null;
 }
 
 export interface HypothesisRow {
   id: number;
   incident_id: string;
+  run_id: number | null;
   title: string;
   description: string;
   confidence: number;
@@ -73,6 +95,7 @@ export interface PlanRow {
   created_at: string;
   approved_at: string | null;
   approved_by: string | null;
+  approval_expires_at: string | null;
   rejection_reason: string | null;
   hash: string | null;
   executed_at: string | null;
@@ -104,6 +127,11 @@ export interface PlanWithActions extends PlanRow {
 export function listIncidents(filters: IncidentListFilters = {}): IncidentListItem[] {
   const where: string[] = [];
   const params: Record<string, string> = {};
+
+  // Live mode never surfaces demo incidents.
+  if (!isDemoMode()) {
+    where.push("i.is_demo = 0");
+  }
 
   if (filters.severity) {
     where.push("severity = @severity");
@@ -149,7 +177,9 @@ export function getIncident(id: string): Incident | null {
   const row = db()
     .prepare("SELECT * FROM incidents WHERE id = ?")
     .get(id) as Incident | undefined;
-  return row ?? null;
+  if (!row) return null;
+  if (!isDemoMode() && row.is_demo === 1) return null;
+  return row;
 }
 
 export function getIncidentFull(id: string): IncidentFull | null {
@@ -194,14 +224,20 @@ export function getIncidentFull(id: string): IncidentFull | null {
     plan = { ...planRow, actions };
   }
 
-  return { ...incident, events, evidence, hypotheses, runs, plan };
+  const executions = db()
+    .prepare(
+      "SELECT * FROM executions WHERE incident_id = ? ORDER BY started_at ASC",
+    )
+    .all(id) as ExecutionRow[];
+
+  return { ...incident, events, evidence, hypotheses, runs, plan, executions };
 }
 
 export function nextIncidentId(d: Database = db()): string {
   const row = d
     .prepare("SELECT MAX(CAST(SUBSTR(id, 5) AS INTEGER)) AS max_num FROM incidents")
     .get() as { max_num: number | null };
-  const next = (row.max_num ?? 142) + 1;
+  const next = (row.max_num ?? 0) + 1;
   return `INC-${String(next).padStart(4, "0")}`;
 }
 
@@ -215,18 +251,47 @@ export interface CreateIncidentInput {
   repository?: string | null;
   alertPayload?: string | null;
   assignedTo?: string | null;
+  actorName?: string | null;
+  workspaceId?: string | null;
+  environmentId?: string | null;
+  environment?: string | null;
+  source?: string | null;
+  idempotencyKey?: string | null;
+  requestId?: string | null;
+  metadata?: string | null;
+  providerConnectionId?: string | null;
+}
+
+/**
+ * Returns an existing incident created with the same idempotency key, or
+ * null when the key is new/absent.
+ */
+export function findByIdempotencyKey(key: string | null): Incident | null {
+  if (!key) return null;
+  const row = db()
+    .prepare("SELECT * FROM incidents WHERE idempotency_key = ?")
+    .get(key) as Incident | undefined;
+  return row ?? null;
 }
 
 export function createIncident(
   input: CreateIncidentInput,
   d: Database = db(),
 ): Incident {
+  // Idempotency: an incident created earlier with the same key is returned
+  // instead of creating a duplicate. The API route surfaces this as a 200
+  // with duplicate:true.
+  if (input.idempotencyKey) {
+    const existing = findByIdempotencyKey(input.idempotencyKey);
+    if (existing) return existing;
+  }
+
   const id = nextIncidentId(d);
   const now = nowIso();
 
   const insert = d.prepare(`
-    INSERT INTO incidents (id, title, service, severity, status, description, started_at, created_at, resolved_at, assigned_to, deployment_id, repository, alert_payload, is_demo)
-    VALUES (@id, @title, @service, @severity, 'open', @description, @started_at, @created_at, NULL, @assigned_to, @deployment_id, @repository, @alert_payload, 0)
+    INSERT INTO incidents (id, title, service, severity, status, description, started_at, created_at, resolved_at, assigned_to, deployment_id, repository, alert_payload, is_demo, source, workspace_id, environment_id, environment, idempotency_key, request_id, metadata)
+    VALUES (@id, @title, @service, @severity, 'open', @description, @started_at, @created_at, NULL, @assigned_to, @deployment_id, @repository, @alert_payload, 0, @source, @workspace_id, @environment_id, @environment, @idempotency_key, @request_id, @metadata)
   `);
   const insertEvent = d.prepare(`
     INSERT INTO incident_events (incident_id, type, title, description, actor, created_at)
@@ -242,15 +307,26 @@ export function createIncident(
       description: input.description,
       started_at: input.startedAt,
       created_at: now,
-      assigned_to: input.assignedTo ?? "u-ava",
+      assigned_to: input.assignedTo ?? null,
       deployment_id: input.deploymentId ?? null,
       repository: input.repository ?? null,
       alert_payload: input.alertPayload ?? null,
+      source: input.source ?? null,
+      workspace_id: input.workspaceId ?? null,
+      environment_id: input.environmentId ?? null,
+      environment: input.environment ?? null,
+      idempotency_key: input.idempotencyKey ?? null,
+      request_id: input.requestId ?? null,
+      metadata: (() => {
+        const base = input.metadata ? JSON.parse(input.metadata) : {};
+        if (input.providerConnectionId) base.provider_connection_id = input.providerConnectionId;
+        return Object.keys(base).length > 0 ? JSON.stringify(base) : null;
+      })(),
     });
     insertEvent.run({
       incident_id: id,
-      description: `Created from ${input.alertPayload ? "alert payload" : "manual entry"}.`,
-      actor: "Ava Chen",
+      description: `Created from ${input.alertPayload ? "alert payload" : input.source ?? "manual entry"}.`,
+      actor: input.actorName ?? null,
       created_at: now,
     });
     if (input.alertPayload) {
@@ -317,11 +393,28 @@ export function addEventOnce(
     .run(incidentId, runId, type, title, description, actor, at, incidentId, runId, type);
 }
 
-export function listServices(): string[] {
-  const rows = db()
-    .prepare("SELECT name FROM services ORDER BY name ASC")
-    .all() as { name: string }[];
-  return rows.map((r) => r.name);
+/**
+ * Service options for forms and filters.
+ *
+ * - Demo mode: from the seeded services table.
+ * - Live mode: from the configured infrastructure provider. Returns an
+ *   empty list when no provider is configured (never fabricated).
+ */
+export async function listServices(): Promise<string[]> {
+  if (isDemoMode()) {
+    const rows = db()
+      .prepare("SELECT name FROM services ORDER BY name ASC")
+      .all() as { name: string }[];
+    return rows.map((r) => r.name);
+  }
+  try {
+    const { getInfrastructureProvider, providerAvailable } = await import("@/lib/providers/registry");
+    if (!providerAvailable()) return [];
+    const services = await getInfrastructureProvider().getServices();
+    return services.map((s) => s.name);
+  } catch {
+    return [];
+  }
 }
 
 export function getUserName(id: string | null): string | null {

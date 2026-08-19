@@ -25,7 +25,7 @@ export function ServiceHealthList({ services }: { services: ServiceHealthRow[] }
           return (
             <div
               key={service.name}
-              className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50"
+              className="list-item-hover flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50"
             >
               <div className="flex min-w-0 flex-col">
                 <code className="truncate font-mono text-xs text-foreground">{service.name}</code>

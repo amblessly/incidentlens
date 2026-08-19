@@ -173,7 +173,10 @@ export const INVESTIGATION_PHASE_META: Record<
 export const INVESTIGATOR_NAME = "Ava Chen";
 export const INVESTIGATOR_ROLE = "On-call engineer";
 
-export const CLANKER_AGENT_NAME = "Clanker Investigator";
+export const DEFAULT_AGENT_NAME = "IncidentLens Investigator";
+
+/** @deprecated Use DEFAULT_AGENT_NAME */
+export const CLANKER_AGENT_NAME = DEFAULT_AGENT_NAME;
 
 /** Rollback strategy value that marks an action as requiring human intervention. */
 export const MANUAL_RECOVERY_LABEL = "Manual recovery required";

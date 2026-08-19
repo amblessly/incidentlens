@@ -1,11 +1,20 @@
-import { apiError, json } from "@/lib/api";
+import { apiError, errorToResponse, json, requestId } from "@/lib/api";
+import { requireApiAuth } from "@/lib/api-auth";
+import { withLogContext } from "@/lib/log";
 import { getIncidentFull } from "@/lib/services/incidents";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_request: Request, ctx: RouteContext<"/api/incidents/[id]">) {
-  const { id } = await ctx.params;
-  const incident = getIncidentFull(id);
-  if (!incident) return apiError("Incident not found.", 404);
-  return json({ incident });
+export async function GET(request: Request, ctx: RouteContext<"/api/incidents/[id]">) {
+  return withLogContext({ requestId: requestId(request) }, async () => {
+    try {
+      const { id } = await ctx.params;
+      await requireApiAuth(request);
+      const incident = getIncidentFull(id);
+      if (!incident) return apiError("Incident not found.", 404, { request });
+      return json({ incident }, undefined, request);
+    } catch (error) {
+      return errorToResponse(error, request);
+    }
+  });
 }

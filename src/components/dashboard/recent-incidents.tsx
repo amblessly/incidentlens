@@ -21,7 +21,7 @@ export function RecentIncidents({ incidents }: { incidents: IncidentListItem[] }
           <Link
             key={inc.id}
             href={`/incidents/${inc.id}`}
-            className="group flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50"
+            className="group list-item-hover flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50"
           >
             <div className="flex min-w-0 flex-col">
               <p className="truncate text-sm font-medium group-hover:underline">{inc.title}</p>

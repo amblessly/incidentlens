@@ -2,93 +2,206 @@
 
 **Evidence-driven AI incident investigation** — not an incident chatbot.
 
-IncidentLens is an AI incident investigation agent that uses Clanker to inspect infrastructure context, correlate operational evidence, generate ranked root-cause hypotheses, and prepare **human-approved remediation plans**. It never blindly modifies production infrastructure.
+IncidentLens investigates incidents by querying real infrastructure through [Clanker Cloud MCP](https://github.com/bgdnvk/clanker), correlates operational evidence into a graph, generates ranked root-cause hypotheses, and prepares **human-approved remediation plans** with risk, blast radius and rollback for every action.
+
+> **DevKada × Clanker Cloud Hackathon** — Marketplace Agent Track
 
 ## The core workflow
 
 ```
-Investigation → Evidence → Root cause → Plan → Human approval → Execution boundary
+Incident → Clanker Agent → Real Infrastructure → Evidence Graph → Root Cause → Remediation Plan → Human Approval
 ```
 
-Everything is separated: the agent investigates read-only, evidence is correlated into a graph, remediation is proposed with risk/blast-radius/rollback for every action, and nothing executes without an explicit human approval that is verified against a plan fingerprint at execution time.
+## How Clanker Cloud Is Integrated
 
-## Demo flow (2–3 minutes)
+IncidentLens connects to Clanker via its **MCP (Model Context Protocol) HTTP server**:
 
-1. **Create an incident** — e.g. "Production API — 5xx spike" — and start the investigation.
-2. **Agent investigates** with Clanker as the infrastructure intelligence layer (service health, deployments, error logs, database state, correlation).
-3. **Evidence graph** — the centerpiece. Every node maps to real collected evidence: deployment → error spike → API failures → DB connection pressure. Click a node or relationship to see source, timestamp, observation, relevance, confidence and related evidence.
-4. **Remediation plan** — each action shows proposed change, why, evidence, expected impact, risk, blast radius, rollback strategy and approval requirement. The plan preview is shown as a terminal-style checklist.
-5. **Approval** — "Review required before infrastructure changes." Approving is not executing: a separate execution boundary requires a valid, non-expired approval, an unchanged plan hash, and an explicit user action.
+```
+IncidentLens
+     │
+     │ MCP HTTP (JSON-RPC 2.0)
+     ▼
+Clanker CLI (localhost:39393)
+     │
+     ├── AWS
+     ├── GCP
+     ├── Azure
+     ├── Kubernetes
+     ├── Vercel
+     ├── Cloudflare
+     ├── Railway
+     └── etc.
+```
 
-## Getting started
+Clanker provides **infrastructure intelligence** — natural-language queries against real cloud environments. IncidentLens turns that intelligence into an evidence-driven incident investigation workflow with human-controlled remediation.
+
+### Clanker MCP Tools Used
+
+| Tool | Purpose in IncidentLens |
+| --- | --- |
+| `clanker_ask` | Natural-language infrastructure queries (service health, metrics, logs) |
+| `clanker_k8s_ask_cluster` | Kubernetes cluster investigation |
+| `clanker_k8s_logs` | Pod log collection and analysis |
+| `clanker_run_command` | Direct CLI execution for inventory/cost queries |
+
+## Provider Architecture
+
+IncidentLens is **provider-agnostic**. The investigation engine depends only on the `InfrastructureProvider` interface:
+
+```
+                         IncidentLens
+                              │
+                   ┌──────────┴──────────┐
+                   │ Investigation Engine │
+                   └──────────┬──────────┘
+                              │
+                       Provider Interface
+                              │
+            ┌─────────┬───────┼────────┬─────────┐
+            ↓         ↓       ↓        ↓         ↓
+          Mock    Clanker   Generic  Datadog    AWS
+        Adapter   (MCP)      API    Adapter  Adapter
+```
+
+| Provider | Type | Description |
+| --- | --- | --- |
+| **MockInfrastructureProvider** | `mock` | Deterministic fixtures for demo/screenshots |
+| **ClankerMCPProvider** | `clanker` | Local Clanker CLI via MCP HTTP — real infrastructure queries |
+| **ClankerProvider** | `clanker` | Clanker Cloud Sandbox API — production deployments |
+| **GenericApiProvider** | `generic` | Any REST/GraphQL endpoint with evidence transforms |
+
+## Investigation Phases
+
+1. **Collecting Evidence** — query the provider for services, health, deployments, logs, metrics, database state, and recent changes
+2. **Checking Changes** — inspect recent deployments, config changes, and pipeline runs
+3. **Correlating Evidence** — build evidence relationships (causes, confirms, reflects, contradicts)
+4. **Evaluating Hypotheses** — score root causes against evidence (supporting + contradicting)
+5. **Preparing Remediation** — generate actions with risk, blast radius, rollback strategy, and human approval requirement
+
+## Demo Scenario
+
+The seeded demo tells a real DevOps story:
+
+```
+Production API 5xx spike
+       │
+       ▼
+Clanker investigates:
+  ✓ Services → api-production CRITICAL
+  ✓ Deployments → DEP-9081 (10 min ago)
+  ✓ Logs → "connection pool exhausted"
+  ✓ Metrics → error rate 18%, p95 latency 4200ms
+  ✓ Database → 98/100 connections, 4800ms replication lag
+       │
+       ▼
+Evidence Graph:
+  Deployment DEP-9081
+       ↓ causes
+  DB Connection Pool Exhaustion
+       ↓ causes
+  API Request Timeouts
+       ↓ results in
+  5xx Error Spike
+       │
+       ▼
+Hypothesis (92% confidence):
+  "Recent deployment introduced unbounded DB queries
+   causing connection pool exhaustion"
+       │
+       ▼
+Remediation Plan:
+  1. Roll back DEP-9081 to v3.4.0 (medium risk)
+  2. Monitor DB connection pool recovery (low risk)
+  3. Optimize JOIN queries before re-deploying (low risk)
+       │
+       ▼
+[Human Approval Required] → Execute
+```
+
+## Quick Start
 
 ```bash
+# Install dependencies
 npm install
+
+# Set up environment
+cp .env.example .env.local
+# Edit .env.local (demo mode works out of the box)
+
+# Run development server
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). On first run the app seeds demo incidents, including the `INC-0142` "Production API — 5xx spike" walkthrough. The app ships in **demo mode** by default — the investigation agent runs against a built-in simulated Clanker environment with no credentials required.
+### PostgreSQL Setup (Neon)
 
-### Live Clanker setup
+The project uses PostgreSQL for persistent storage. Tables are created via migration:
 
 ```bash
-# 1. Install the Clanker CLI and verify your environment
-clanker onboarding scan
+# Run migration
+DATABASE_URL="postgresql://..." npx tsx scripts/migrate-pg.ts
 
-# 2. Verify you can query infrastructure
-clanker ask "what services and resources are currently running?"
-
-# 3. Point IncidentLens at Clanker Cloud
-cp .env.example .env
-# Set CLANKER_MODE=live and fill in CLANKER_API_URL / CLANKER_API_KEY / CLANKER_AGENT_ID
+# Seed demo data
+DATABASE_URL="postgresql://..." npx tsx scripts/seed-pg.ts
 ```
 
-Credentials live only in the Clanker/server environment. They are **never** placed in `Next.js` server-side env used by the browser, never logged, and never committed.
+### Live Clanker Integration
 
-## Project structure
+To connect to real infrastructure:
 
-Next.js App Router (under `src/`):
+```bash
+# 1. Install and configure Clanker
+brew install clanker
+clanker config init
+clanker onboarding scan --provider aws,gcp,azure,kubernetes
 
-```
-src/
-├── app/
-│   ├── dashboard/
-│   ├── incidents/
-│   │   ├── new/
-│   │   └── [id]/
-│   │       ├── investigation/
-│   │       └── plan/
-│   └── settings/
-├── components/
-│   ├── incidents/
-│   ├── investigation/        # agent panel, evidence list, hypotheses, evidence graph
-│   ├── plan/                 # remediation review (approval/execution UI)
-│   └── ui/
-├── lib/
-│   ├── clanker/              # client, investigation agent, prompts, types
-│   ├── db/                   # sqlite schema, migrations, seed scenarios
-│   ├── demo/                 # demo incident scenarios + generator
-│   └── services/             # incidents, plans, execution boundary, plan hash
-└── ...
+# 2. Start MCP server
+clanker mcp --transport http --listen 127.0.0.1:39393
+
+# 3. Update .env.local
+INCIDENTLENS_MODE=live
+CLANKER_MCP_URL=http://127.0.0.1:39393
 ```
 
-## Configuration
+## Architecture
 
-See [.env.example](.env.example). Supported variables:
+```
+IncidentLens
+├── Investigation Engine        ← core logic (no provider imports)
+├── Providers
+│   ├── ClankerMCPProvider      ← MCP HTTP → Clanker CLI → Cloud
+│   ├── ClankerProvider         ← Clanker Cloud Sandbox API
+│   ├── GenericApiProvider      ← REST/GraphQL endpoints
+│   └── MockProvider            ← demo fixtures
+├── Evidence Graph              ← correlated evidence relationships
+├── Hypothesis Engine           ← scoring + confidence ranking
+├── Remediation Plans           ← risk/blast radius/rollback
+├── Human Approval              ← fingerprint-verified approvals
+└── Execution Boundary          ← read-only vs approved changes
+```
 
-| Variable | Purpose | Default |
-| --- | --- | --- |
-| `INCIDENTLENS_DB_PATH` | SQLite database path | `./data/incidentlens.db` |
-| `CLANKER_MODE` | `demo` or `live` | `demo` |
-| `CLANKER_API_URL` / `CLANKER_API_KEY` / `CLANKER_AGENT_ID` | Clanker Cloud credentials (live mode) | — |
-| `CLANKER_DEMO_STEP_DELAY_MS` | Simulated investigation step pacing | `420` |
-| `CLANKER_TIMEOUT_MS` | Clanker API timeout | `120000` |
-| `APPROVAL_TTL_MS` | How long an approval stays valid before execution is refused | `3600000` |
+## Tech Stack
 
-## Safety model
+- **Framework**: Next.js 16 + React 19
+- **Database**: PostgreSQL (Neon) + SQLite (local dev)
+- **AI Integration**: Clanker Cloud MCP + OpenAI
+- **UI**: Tailwind CSS + shadcn/ui + Recharts
+- **Validation**: Zod
+- **Testing**: Vitest
 
-- Investigation is read-only; the agent only queries infrastructure state.
-- Every mutable remediation action defines a rollback strategy, blast radius and approval requirement.
-- Actions that cannot define a rollback are marked **"Manual recovery required"** and one-click execution is blocked.
-- The plan is fingerprinted at generation time. Execution recomputes the hash and refuses to run if the plan changed after approval, or if the approval expired.
-- Credentials are never exposed to the browser and never placed in logs.
+## Key Files
+
+| Path | Purpose |
+| --- | --- |
+| `src/lib/investigation/engine.ts` | Evidence-driven investigation engine |
+| `src/lib/providers/adapters/clanker/mcp-provider.ts` | Clanker MCP integration |
+| `src/lib/providers/adapters/clanker/mcp-client.ts` | MCP HTTP client |
+| `src/lib/providers/adapters/mock/mock-provider.ts` | Demo fixtures (deployment → DB → 5xx story) |
+| `src/lib/providers/registry.ts` | Provider registration and resolution |
+| `src/app/api/incidents/[id]/investigation/route.ts` | Investigation API endpoint |
+| `src/components/investigation/evidence-graph.tsx` | Evidence graph visualization |
+| `scripts/migrate-pg.ts` | PostgreSQL migration |
+| `scripts/seed-pg.ts` | Demo data seeder |
+
+## License
+
+MIT

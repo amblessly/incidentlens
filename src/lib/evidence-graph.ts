@@ -244,8 +244,14 @@ export function buildEvidenceGraph(input: EvidenceGraphInput): EvidenceGraph {
 
   for (const ev of evidenceNodes) {
     for (const h of hypotheses) {
-      const titles = new Set(parseTitles(h.supporting_evidence));
-      if (titles.has(ev.label)) {
+      const refs = parseTitles(h.supporting_evidence);
+      const supports = refs.some((ref) => {
+        if (/^\d+$/.test(ref)) {
+          return String(ev.id.slice(3)) === ref;
+        }
+        return ref === ev.label;
+      });
+      if (supports) {
         edges.push({
           id: `edge-supports-${ev.id}-hyp-${h.id}`,
           from: ev.id,

@@ -32,10 +32,10 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Active incidents" value={data.counts.active} sub={`${data.counts.open} open · ${data.counts.investigating} investigating`} icon={TriangleAlert} />
-        <StatCard label="Investigating now" value={data.counts.investigating} sub="Agent-active investigations" icon={SearchCheck} />
-        <StatCard label="Awaiting approval" value={data.counts.awaiting_approval} sub="Plans at the human gate" icon={ShieldCheck} />
-        <StatCard label="Resolved" value={data.counts.resolved} sub="Closed incidents" icon={Activity} />
+        <StatCard label="Active incidents" value={data.counts.active} sub={`${data.counts.open} open · ${data.counts.investigating} investigating`} icon={TriangleAlert} accent="hover:border-amber-500/30" />
+        <StatCard label="Investigating now" value={data.counts.investigating} sub="Agent-active investigations" icon={SearchCheck} accent="hover:border-blue-500/30" />
+        <StatCard label="Awaiting approval" value={data.counts.awaiting_approval} sub="Plans at the human gate" icon={ShieldCheck} accent="hover:border-violet-500/30" />
+        <StatCard label="Resolved" value={data.counts.resolved} sub="Closed incidents" icon={Activity} accent="hover:border-emerald-500/30" />
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -44,12 +44,14 @@ export default function DashboardPage() {
           value={formatMinutes(data.mttiMinutes)}
           sub="Investigation run duration"
           icon={Timer}
+          accent="hover:border-cyan-500/30"
         />
         <StatCard
           label="Mean time to resolve"
           value={formatMinutes(data.mttrMinutes)}
           sub="Incident start → resolved"
           icon={Clock}
+          accent="hover:border-pink-500/30"
         />
       </div>
 

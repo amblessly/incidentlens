@@ -1,13 +1,10 @@
 import { db } from "@/lib/db";
-import { getInvestigator } from "@/lib/clanker/investigation-agent";
-import {
-  type IncidentInvestigationInput,
-  type InvestigationResult,
-  type InvestigationStep,
-} from "@/lib/clanker/types";
-import { CLANKER_AGENT_NAME, EVENT_META, INVESTIGATOR_NAME } from "@/lib/constants";
-import { INVESTIGATION_PROMPT_VERSION } from "@/lib/clanker/prompts";
+import { DEFAULT_AGENT_NAME } from "@/lib/constants";
 import { nowIso } from "@/lib/format";
+import { providerErrorMessage } from "@/lib/errors";
+import { investigationLogger } from "@/lib/log";
+import { runEngine, type EngineResult, type EngineStep } from "@/lib/investigation/engine";
+import { getInfrastructureProvider } from "@/lib/providers/registry";
 import { addEventOnce, getIncident, updateIncidentStatus } from "@/lib/services/incidents";
 import type { EventType } from "@/lib/types";
 
@@ -38,6 +35,9 @@ export interface RunRow {
   finished_at: string | null;
   error: string | null;
   result: string | null;
+  request_id: string | null;
+  workspace_id: string | null;
+  provider_connection_id: string | null;
 }
 
 export interface InvestigationState {
@@ -81,41 +81,21 @@ export function hasCompletedInvestigation(incidentId: string): boolean {
   );
 }
 
-function buildInput(incidentId: string): IncidentInvestigationInput {
-  const incident = getIncident(incidentId);
-  if (!incident) {
-    throw new InvestigationError("Incident not found.");
-  }
-  return {
-    incidentId: incident.id,
-    title: incident.title,
-    description: incident.description,
-    service: incident.service,
-    severity: incident.severity,
-    startedAt: incident.started_at,
-    deploymentId: incident.deployment_id,
-    repository: incident.repository,
-    alertPayload: incident.alert_payload,
-  };
-}
-
 /**
- * Runs the configured investigator for an incident, persisting step progress,
- * timeline events, evidence and hypotheses as it goes.
- *
- * The investigator is strictly read-only; no infrastructure is mutated here.
+ * Runs the evidence-driven investigation engine against the connected
+ * infrastructure provider, persisting steps, timeline events, evidence,
+ * relationships and hypotheses as it goes.
  *
  * Failure contract:
  * - the incident is preserved
- * - any previous evidence and hypotheses are preserved (a new run only
- *   replaces them on success)
- * - the run is marked failed with a clear message
+ * - any previous evidence/hypotheses are preserved (only replaced on success)
+ * - the run is marked failed with a clear message and error code
  * - nothing is ever fabricated in place of unavailable evidence
  */
 export async function runInvestigation(
   incidentId: string,
-  opts: { onStep?: (step: InvestigationStep) => void; initiatedBy?: string } = {},
-): Promise<InvestigationResult> {
+  opts: { onStep?: (step: EngineStep) => void; initiatedBy?: string } = {},
+): Promise<EngineResult> {
   const d = db();
   const incident = getIncident(incidentId);
   if (!incident) throw new InvestigationError("Incident not found.");
@@ -123,20 +103,22 @@ export async function runInvestigation(
     throw new InvestigationError("Resolved incidents cannot be re-investigated.");
   }
 
+  const provider = getInfrastructureProvider();
+  const providerName = provider.name;
   const startedAt = nowIso();
-  const investigator = getInvestigator();
   const runResult = d
     .prepare(
-      `INSERT INTO investigation_runs (incident_id, status, agent, provider, prompt_version, initiated_by, started_at)
-       VALUES (?, 'running', ?, ?, ?, ?, ?)`,
+      `INSERT INTO investigation_runs (incident_id, status, agent, provider, prompt_version, initiated_by, started_at, workspace_id)
+       VALUES (?, 'running', ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       incidentId,
-      CLANKER_AGENT_NAME,
-      investigator.provider,
-      null,
-      opts.initiatedBy ?? INVESTIGATOR_NAME,
+      DEFAULT_AGENT_NAME,
+      provider.id,
+      "engine",
+      opts.initiatedBy ?? "system",
       startedAt,
+      incident.workspace_id,
     );
   const runId = Number(runResult.lastInsertRowid);
 
@@ -145,8 +127,8 @@ export async function runInvestigation(
     runId,
     "investigation_started",
     "Investigation started",
-    `${investigator.provider === "clanker-cloud" ? "Clanker Investigator" : "Demo investigator"} assigned.`,
-    CLANKER_AGENT_NAME,
+    `Evidence-driven investigation started against ${providerName}.`,
+    DEFAULT_AGENT_NAME,
     startedAt,
   );
 
@@ -163,7 +145,7 @@ export async function runInvestigation(
       updated_at = excluded.updated_at
   `);
 
-  const handleStep = (step: InvestigationStep) => {
+  const handleStep = (step: EngineStep) => {
     const at = nowIso();
     upsertStep.run({
       run_id: runId,
@@ -178,17 +160,21 @@ export async function runInvestigation(
     });
     const eventType = STEP_TO_EVENT[step.id];
     if (step.status === "done" && eventType) {
-      const meta = EVENT_META[eventType];
-      addEventOnce(incidentId, runId, eventType, meta.label, step.detail, CLANKER_AGENT_NAME, at);
+      addEventOnce(incidentId, runId, eventType, step.label, step.detail, DEFAULT_AGENT_NAME, at);
     }
     opts.onStep?.(step);
   };
 
-  let result: InvestigationResult;
+  let result: EngineResult;
   try {
-    result = await investigator.investigateIncident(buildInput(incidentId), handleStep);
+    result = await runEngine({
+      incident,
+      environment: incident.environment ?? "production",
+      provider,
+      onStep: handleStep,
+    });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Investigation failed unexpectedly.";
+    const message = providerErrorMessage(error);
     const finishedAt = nowIso();
     d.prepare(
       "UPDATE investigation_runs SET status = 'failed', finished_at = ?, error = ? WHERE id = ?",
@@ -199,51 +185,73 @@ export async function runInvestigation(
       "note",
       "Investigation failed",
       message,
-      CLANKER_AGENT_NAME,
+      DEFAULT_AGENT_NAME,
       finishedAt,
     );
+    investigationLogger.error("investigation failed", { incidentId, runId, error: message });
     throw new InvestigationError(message);
   }
 
   const finishedAt = nowIso();
   d.transaction(() => {
     d.prepare(
-      "UPDATE investigation_runs SET status = 'completed', finished_at = ?, prompt_version = ?, result = ? WHERE id = ?",
-    ).run(finishedAt, INVESTIGATION_PROMPT_VERSION, JSON.stringify(result), runId);
+      "UPDATE investigation_runs SET status = 'completed', finished_at = ?, prompt_version = 'engine-1', result = ? WHERE id = ?",
+    ).run(finishedAt, JSON.stringify(result), runId);
 
+    d.prepare("DELETE FROM evidence_relationships WHERE evidence_id IN (SELECT id FROM evidence WHERE incident_id = ?)").run(incidentId);
     d.prepare("DELETE FROM evidence WHERE incident_id = ?").run(incidentId);
     const insertEvidence = d.prepare(`
-      INSERT INTO evidence (incident_id, source, title, observation, relevance, confidence, timestamp, data)
-      VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+      INSERT INTO evidence (incident_id, run_id, source, source_type, title, observation, relevance, confidence, timestamp, service, environment, data)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     `);
+    const dbIds: number[] = [];
     for (const e of result.evidence) {
-      insertEvidence.run(
+      const r = insertEvidence.run(
         incidentId,
+        runId,
         e.source,
-        e.title,
+        e.sourceType,
+        e.observation.slice(0, 140),
         e.observation,
         e.relevance,
         e.confidence,
-        finishedAt,
+        e.timestamp,
+        e.service,
+        e.environment,
       );
+      dbIds.push(Number(r.lastInsertRowid));
+    }
+
+    const insertRelationship = d.prepare(`
+      INSERT OR IGNORE INTO evidence_relationships (evidence_id, related_evidence_id, relationship, reason)
+      VALUES (?, ?, ?, ?)
+    `);
+    for (const rel of result.relationships) {
+      const fromId = dbIds[rel.from];
+      const toId = dbIds[rel.to];
+      if (fromId === undefined || toId === undefined) continue;
+      insertRelationship.run(fromId, toId, rel.relationship, rel.reason);
     }
 
     d.prepare("DELETE FROM hypotheses WHERE incident_id = ?").run(incidentId);
     const insertHypothesis = d.prepare(`
-      INSERT INTO hypotheses (incident_id, title, description, confidence, is_selected, supporting_evidence, contradicting_evidence, missing_evidence, next_step, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO hypotheses (incident_id, run_id, title, description, confidence, is_selected, supporting_evidence, contradicting_evidence, missing_evidence, next_step, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     result.hypotheses.forEach((h, i) => {
+      const toDbIds = (indices: number[]) =>
+        JSON.stringify(indices.map((idx) => dbIds[idx]).filter((id): id is number => id !== undefined));
       insertHypothesis.run(
         incidentId,
+        runId,
         h.title,
-        h.description,
+        h.explanation,
         h.confidence,
         i === 0 ? 1 : 0,
-        JSON.stringify(h.supportingEvidence),
-        JSON.stringify(h.contradictingEvidence),
+        toDbIds(h.supportingEvidence),
+        toDbIds(h.contradictingEvidence),
         JSON.stringify(h.missingEvidence),
-        h.nextStep,
+        h.suggestedNextStep,
         finishedAt,
       );
     });
@@ -255,8 +263,8 @@ export async function runInvestigation(
     runId,
     "evidence_correlated",
     "Evidence correlated",
-    `Correlated ${result.evidence.length} evidence items across sources.`,
-    CLANKER_AGENT_NAME,
+    `Correlated ${result.evidence.length} evidence items across ${result.relationships.length} relationships.`,
+    DEFAULT_AGENT_NAME,
     finishedAt,
   );
   addEventOnce(
@@ -265,7 +273,7 @@ export async function runInvestigation(
     "hypothesis_generated",
     "Root-cause hypothesis generated",
     `Leading hypothesis: ${result.hypotheses[0]?.title ?? "none"} (${Math.round((result.hypotheses[0]?.confidence ?? 0) * 100)}%).`,
-    CLANKER_AGENT_NAME,
+    DEFAULT_AGENT_NAME,
     finishedAt,
   );
 

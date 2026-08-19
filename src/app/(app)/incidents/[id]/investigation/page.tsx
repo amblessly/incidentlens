@@ -62,7 +62,7 @@ export default async function InvestigationPage(props: PageProps<"/incidents/[id
             </CardContent>
           </Card>
 
-          <HypothesesList hypotheses={incident.hypotheses} />
+          <HypothesesList hypotheses={incident.hypotheses} evidence={incident.evidence} />
         </>
       )}
 

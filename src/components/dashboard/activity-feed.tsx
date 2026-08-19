@@ -25,7 +25,7 @@ export function ActivityFeed({ activity }: { activity: ActivityRow[] }) {
             <Link
               key={`${item.incident_id}-${item.created_at}-${item.type}`}
               href={`/incidents/${item.incident_id}`}
-              className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50"
+              className="list-item-hover flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50"
             >
               <div className="flex min-w-0 flex-col">
                 <p className="truncate text-sm font-medium">{meta.label}</p>

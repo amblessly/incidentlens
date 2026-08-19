@@ -1,117 +1,175 @@
-import { Bot, Database, FlaskConical } from "lucide-react";
+import { Bot, Database, Globe2 } from "lucide-react";
 
+import { ApiKeysPanel } from "@/components/settings/api-keys-panel";
+import { ProvidersPanel } from "@/components/settings/providers-panel";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-import { readClankerConfig } from "@/lib/clanker/clanker-client";
+import { appMode, modeDescription, modeLabel, sessionSecretConfigured } from "@/lib/config";
+import { hasPermission } from "@/lib/auth/permissions";
 import { db } from "@/lib/db";
+import { providerAvailable } from "@/lib/providers/registry";
+import { listEnvironments, listWorkspaces } from "@/lib/services/workspaces";
+import { appUiState } from "@/lib/ui-state";
 
 export const metadata = {
   title: "Settings",
 };
 
-export default function SettingsPage() {
-  const clankerConfig = readClankerConfig();
-  const clankerMode = process.env.CLANKER_MODE ?? "demo";
-  const clankerConfigured = clankerMode === "live";
+export default async function SettingsPage() {
+  const mode = appMode();
+  const isDemo = mode === "demo";
+  const state = await appUiState();
+  const isAdmin = state.user ? hasPermission(state.user.role, "settings.manage") : false;
+
+  const workspace = listWorkspaces()[0] ?? null;
+  const environments = workspace ? listEnvironments(workspace.id) : [];
+  const providerReady = providerAvailable();
 
   const database = db();
   const counts = {
     incidents: (database.prepare("SELECT COUNT(*) AS n FROM incidents").get() as { n: number }).n,
     users: (database.prepare("SELECT COUNT(*) AS n FROM users").get() as { n: number }).n,
-    services: (database.prepare("SELECT COUNT(*) AS n FROM services").get() as { n: number }).n,
-    evidence: (database.prepare("SELECT COUNT(*) AS n FROM evidence").get() as { n: number }).n,
+    investigationRuns: (database.prepare("SELECT COUNT(*) AS n FROM investigation_runs").get() as { n: number }).n,
+    plans: (database.prepare("SELECT COUNT(*) AS n FROM remediation_plans").get() as { n: number }).n,
   };
 
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Integration status and local state.
-        </p>
-      </div>
+    <div className="flex flex-col gap-6">
+      <h1 className="text-lg font-semibold">Settings</h1>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Globe2 className="size-4 text-muted-foreground" aria-hidden />
+            Status
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <dl className="grid gap-4 text-sm sm:grid-cols-2">
+            <div>
+              <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Mode
+              </dt>
+              <dd className="font-medium">{modeLabel(mode)}</dd>
+              <dd className="text-xs text-muted-foreground">{modeDescription(mode)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Provider
+              </dt>
+              <dd className="text-muted-foreground">
+                {isDemo
+                  ? "Demo provider (deterministic fixtures, clearly labeled)"
+                  : providerReady
+                    ? "Connected"
+                    : "Not configured — investigations will report evidence as unavailable."}
+              </dd>
+            </div>
+          </dl>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Bot className="size-4 text-muted-foreground" aria-hidden />
-            Clanker integration
+            Infrastructure providers
           </CardTitle>
+          <CardDescription>
+            Configure providers for incident investigation. Credentials stay server-side.
+          </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <p className="text-sm font-medium">Investigation agent mode</p>
-              <p className="text-xs text-muted-foreground">
-                {clankerMode === "live"
-                  ? "Requests are dispatched to the Clanker Cloud agent."
-                  : "Deterministic demo investigator — no live infrastructure queried."}
-              </p>
-            </div>
-            <Badge
-              variant="outline"
-              className={
-                clankerConfigured && clankerMode === "live"
-                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:border-emerald-500/40 dark:text-emerald-400"
-                  : "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:border-amber-500/40 dark:text-amber-400"
-              }
-            >
-              {clankerConfigured && clankerMode === "live" ? "Live" : "Demo"}
-            </Badge>
-          </div>
+        <CardContent>
+          <ProvidersPanel />
+        </CardContent>
+      </Card>
 
+      {workspace && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Database className="size-4 text-muted-foreground" aria-hidden />
+              Workspace — {workspace.name}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <dl className="grid gap-4 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Slug
+                </dt>
+                <dd className="font-mono text-xs">{workspace.slug}</dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Environments
+                </dt>
+                <dd>
+                  {environments.length === 0 && (
+                    <span className="text-muted-foreground">None</span>
+                  )}
+                  {environments.map((env) => (
+                    <span key={env.id}>
+                      <Badge variant="outline" className="mr-1">
+                        {env.name}
+                      </Badge>
+                    </span>
+                  ))}
+                </dd>
+              </div>
+            </dl>
+          </CardContent>
+        </Card>
+      )}
+
+      {isAdmin && (
+        <Card>
+          <CardHeader>
+            <CardTitle>API Keys</CardTitle>
+            <CardDescription>
+              Manage API keys for external incident ingestion. Raw secrets are shown once at
+              creation time and are never retrievable afterwards.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ApiKeysPanel />
+          </CardContent>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Database</CardTitle>
+          <CardDescription>
+            Current database at <code className="text-xs">{database.name}</code>
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
           <dl className="grid gap-3 text-sm sm:grid-cols-2">
             <div>
               <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Endpoint
+                Incidents
               </dt>
-              <dd className="font-mono text-xs">{clankerConfig.baseUrl}</dd>
+              <dd>{counts.incidents}</dd>
             </div>
             <div>
               <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Mode
+                Users
               </dt>
-              <dd className="font-mono text-xs">{clankerMode}</dd>
-            </div>
-          </dl>
-          <p className="text-xs text-muted-foreground">
-            Clanker Cloud uses anonymous sandboxes for live investigations. No API key required.
-            Credentials live in the server environment only and are never exposed to the browser.
-          </p>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Database className="size-4 text-muted-foreground" aria-hidden />
-            Local data
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3 text-sm">
-          <p className="text-muted-foreground">
-            SQLite-backed persistence. Delete{" "}
-            <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">data/incidentlens.db</code>{" "}
-            and restart to reseed the demo fixtures.
-          </p>
-          <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Incidents</dt>
-              <dd className="tabular-nums">{counts.incidents}</dd>
+              <dd>{counts.users}</dd>
             </div>
             <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Evidence</dt>
-              <dd className="tabular-nums">{counts.evidence}</dd>
+              <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Investigation runs
+              </dt>
+              <dd>{counts.investigationRuns}</dd>
             </div>
             <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Services</dt>
-              <dd className="tabular-nums">{counts.services}</dd>
-            </div>
-            <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Users</dt>
-              <dd className="tabular-nums">{counts.users}</dd>
+              <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Remediation plans
+              </dt>
+              <dd>{counts.plans}</dd>
             </div>
           </dl>
         </CardContent>
@@ -119,37 +177,24 @@ export default function SettingsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <FlaskConical className="size-4 text-muted-foreground" aria-hidden />
-            Demo data
-          </CardTitle>
+          <CardTitle>Session secret</CardTitle>
+          <CardDescription>
+            Used to sign session cookies. Must be at least 32 characters.
+          </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3 text-sm">
-          <p className="text-muted-foreground">
-            All seeded incidents are simulated and labeled{" "}
-            <Badge variant="outline" className="ml-0.5 border-border bg-muted/50 text-muted-foreground">
-              demo
-            </Badge>
-            . No simulated data is presented as live infrastructure.
-          </p>
-          <Separator />
-          <div className="grid gap-2 sm:grid-cols-3">
-            <DemoCard id="INC-0142" title="API deployment regression" state="awaiting approval" />
-            <DemoCard id="INC-0153" title="Kubernetes pod crash loop" state="open — run live" />
-            <DemoCard id="INC-0161" title="Database pool saturation" state="resolved" />
-          </div>
+        <CardContent>
+          <Badge
+            variant="outline"
+            className={
+              sessionSecretConfigured()
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:border-emerald-500/40 dark:text-emerald-400"
+                : "border-destructive/30 bg-destructive/10 text-destructive dark:border-destructive/40"
+            }
+          >
+            {sessionSecretConfigured() ? "Configured" : "Not configured"}
+          </Badge>
         </CardContent>
       </Card>
-    </div>
-  );
-}
-
-function DemoCard({ id, title, state }: { id: string; title: string; state: string }) {
-  return (
-    <div className="rounded-lg border px-3 py-2.5">
-      <p className="font-mono text-xs text-muted-foreground">{id}</p>
-      <p className="mt-0.5 text-sm font-medium">{title}</p>
-      <p className="text-xs text-muted-foreground">{state}</p>
     </div>
   );
 }

@@ -1,3 +1,13 @@
+/**
+ * @deprecated Import from "@/lib/providers/types" instead.
+ * This file is kept for backward compatibility only.
+ */
+export type {
+  EvidenceRelevance,
+  InvestigationPhase,
+  InvestigationStep,
+} from "@/lib/providers/types";
+
 export interface IncidentInvestigationInput {
   incidentId: string;
   title: string;
@@ -10,13 +20,11 @@ export interface IncidentInvestigationInput {
   alertPayload: string | null;
 }
 
-export type EvidenceRelevance = "primary" | "supporting" | "context";
-
 export interface InvestigationEvidence {
   source: string;
   title: string;
   observation: string;
-  relevance: EvidenceRelevance;
+  relevance: import("@/lib/providers/types").EvidenceRelevance;
   confidence: number;
 }
 
@@ -45,10 +53,6 @@ export interface InvestigationTimelineStep {
 
 /**
  * Normalized, validated result returned by any investigator.
- *
- * This is the contract the whole application consumes. The Clanker adapter
- * is responsible for producing it; everything upstream only ever sees
- * validated data.
  */
 export interface InvestigationResult {
   summary: string;
@@ -60,49 +64,6 @@ export interface InvestigationResult {
   recommendedActions: RecommendedAction[];
   missingEvidence: string[];
   confidence: number;
-  safetyNotes: string[];
-}
-
-/** Stable investigation phase identifiers. */
-export type InvestigationPhase =
-  | "understanding"
-  | "planning"
-  | "collection"
-  | "correlation"
-  | "root-cause"
-  | "remediation";
-
-export interface InvestigationStep {
-  /** Stable machine id, e.g. "inspecting-infrastructure" */
-  id: string;
-  label: string;
-  detail: string;
-  status: "pending" | "active" | "done";
-  phase: InvestigationPhase;
-  /** Where the observation came from, e.g. "clanker-demo" or "k8s". */
-  source: string | null;
-  completedAt: string | null;
-}
-
-export interface InvestigationProgress {
-  runId: number;
-  status: "running" | "completed" | "failed";
-  steps: InvestigationStep[];
-  error: string | null;
-}
-
-/**
- * Boundary the whole application depends on. Anything that can perform an
- * incident investigation (Clanker-backed or otherwise) implements this.
- *
- * The interface is deliberately read-only: an investigator may inspect
- * infrastructure and collect evidence, but must never mutate it.
- */
-export interface InfrastructureInvestigator {
-  readonly provider: string;
-
-  investigateIncident(
-    input: IncidentInvestigationInput,
-    onStep?: (step: InvestigationStep) => void,
-  ): Promise<InvestigationResult>;
+  provider: string;
+  environment: string;
 }

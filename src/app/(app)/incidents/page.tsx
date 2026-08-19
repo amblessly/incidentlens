@@ -24,7 +24,7 @@ export default async function IncidentsPage(props: PageProps<"/incidents">) {
     service: str(searchParams.service),
     q: str(searchParams.q),
   });
-  const services = listServices();
+  const services = await listServices();
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">

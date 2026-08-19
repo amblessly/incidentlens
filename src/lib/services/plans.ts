@@ -1,7 +1,5 @@
 import { db } from "@/lib/db";
-import { CLANKER_AGENT_NAME, INVESTIGATOR_NAME } from "@/lib/constants";
-import { getScenarioForIncident } from "@/lib/demo/generator";
-import type { DemoScenario } from "@/lib/demo/scenarios";
+import { DEFAULT_AGENT_NAME } from "@/lib/constants";
 import { nowIso } from "@/lib/format";
 import { computePlanHash } from "@/lib/services/plan-hash";
 import {
@@ -12,6 +10,7 @@ import {
   type PlanWithActions,
 } from "@/lib/services/incidents";
 import { hasCompletedInvestigation } from "@/lib/services/investigation";
+import type { EngineAction, EngineResult } from "@/lib/investigation/engine";
 import type { RiskLevel } from "@/lib/types";
 
 export class PlanError extends Error {}
@@ -20,54 +19,53 @@ export function getPlan(incidentId: string): PlanWithActions | null {
   return getIncidentFull(incidentId)?.plan ?? null;
 }
 
-function synthesizeActions(scenario: DemoScenario): NonNullable<DemoScenario["plan"]> {
-  const { incident } = scenario;
-  const evidenceTitles = scenario.evidence.map((e) => e.title);
+/** Load the latest completed investigation result for an incident. */
+export function latestInvestigationResult(incidentId: string): EngineResult | null {
+  const run = db()
+    .prepare(
+      "SELECT result FROM investigation_runs WHERE incident_id = ? AND status = 'completed' ORDER BY started_at DESC LIMIT 1",
+    )
+    .get(incidentId) as { result: string | null } | undefined;
+  if (!run?.result) return null;
+  try {
+    return JSON.parse(run.result) as EngineResult;
+  } catch {
+    return null;
+  }
+}
+
+function toPlanActions(engineActions: EngineAction[]): {
+  actions: Parameters<typeof computePlanHash>[1];
+  hasManualRecovery: boolean;
+} {
+  const actions: Parameters<typeof computePlanHash>[1] = [];
+  for (const [i, a] of engineActions.entries()) {
+    actions.push({
+      order_index: i,
+      description: a.description,
+      expected_impact: a.expectedImpact,
+      risk_level: a.risk as RiskLevel,
+      rollback_strategy: a.rollbackStrategy,
+      affected_resources: JSON.stringify(a.resources),
+      reason: a.reason,
+      evidence_refs: JSON.stringify(a.supportingEvidence),
+      approval_required: a.approvalRequired ? 1 : 0,
+      blast_radius: a.blastRadius,
+      prerequisites: JSON.stringify(a.prerequisites),
+    });
+  }
   return {
-    summary:
-      "Human-reviewed remediation plan derived from the investigation evidence. No action executes without explicit approval.",
-    planStatus: "pending_approval",
-    actions: [
-      {
-        description: `Roll back or disable the most recent change to ${incident.service}.`,
-        expectedImpact: "Reverts the most probable trigger; service metrics should return toward baseline.",
-        risk: "high",
-        rollback: "Re-apply the change if a different cause is later confirmed.",
-        resources: [`service/${incident.service}`],
-        reason: "The leading hypothesis points at a recent change as the trigger.",
-        evidenceTitles: evidenceTitles.slice(0, 2),
-        approvalRequired: true,
-        blastRadius: `All traffic served by ${incident.service}.`,
-        prerequisites: [`Previous stable version of ${incident.service} available`],
-      },
-      {
-        description: `Verify ${incident.service} health signals return to baseline.`,
-        expectedImpact: "Confirms whether the intervention resolved the incident.",
-        risk: "low",
-        rollback: "Not applicable — observation only.",
-        resources: [`metrics/${incident.service}`],
-        reason: "Evidence shows abnormal signal during the incident window.",
-        evidenceTitles: evidenceTitles.slice(0, 1),
-        approvalRequired: false,
-        blastRadius: "None — read-only diagnostics.",
-        prerequisites: ["Read access to metrics dashboards"],
-      },
-      {
-        description: `File a follow-up to fix the underlying defect before re-release.`,
-        expectedImpact: "Prevents recurrence.",
-        risk: "low",
-        rollback: "Not applicable — process change.",
-        resources: [`repo/${incident.repository ?? "unknown"}`],
-        reason: "Root cause fix must precede any re-release.",
-        evidenceTitles: [],
-        approvalRequired: false,
-        blastRadius: "None — no production change.",
-        prerequisites: ["Repository access to file a follow-up"],
-      },
-    ],
+    actions,
+    hasManualRecovery: engineActions.some((a) => a.rollbackStrategy === "Manual recovery required"),
   };
 }
 
+/**
+ * Generates a remediation plan from the stored investigation evidence.
+ * Every action references real evidence ids (evidence_refs) and carries an
+ * explicit rollback strategy; actions without a safe rollback are marked
+ * "Manual recovery required" and cannot be executed automatically.
+ */
 export function generatePlan(incidentId: string): PlanWithActions {
   const incident = getIncident(incidentId);
   if (!incident) throw new PlanError("Incident not found.");
@@ -86,100 +84,102 @@ export function generatePlan(incidentId: string): PlanWithActions {
     );
   }
 
+  const result = latestInvestigationResult(incidentId);
+  if (!result) {
+    throw new PlanError("No investigation result is available for this incident.");
+  }
+
   const d = db();
   if (existing) {
     d.prepare("DELETE FROM remediation_plans WHERE id = ?").run(existing.id);
   }
 
-  const scenario = getScenarioForIncident({
-    incidentId: incident.id,
-    title: incident.title,
-    description: incident.description,
-    service: incident.service,
-    severity: incident.severity,
-    startedAt: incident.started_at,
-    deploymentId: incident.deployment_id,
-    repository: incident.repository,
-    alertPayload: incident.alert_payload,
-  });
-  const planSpec = scenario.plan ?? synthesizeActions(scenario);
+  const { actions: actionRows, hasManualRecovery } = toPlanActions(result.recommendedActions);
+  const summary = hasManualRecovery
+    ? "Plan derived from the investigation evidence. Contains actions requiring manual recovery — automatic execution is blocked for those actions."
+    : "Plan derived from the investigation evidence. No action executes without explicit approval.";
+
   const created = nowIso();
 
   const planResult = d
     .prepare(
       "INSERT INTO remediation_plans (incident_id, status, summary, created_at) VALUES (?, 'pending_approval', ?, ?)",
     )
-    .run(incidentId, planSpec.summary, created);
+    .run(incidentId, summary, created);
   const planId = Number(planResult.lastInsertRowid);
 
   const insertAction = d.prepare(`
     INSERT INTO remediation_actions (plan_id, order_index, description, expected_impact, risk_level, rollback_strategy, affected_resources, reason, evidence_refs, approval_required, blast_radius, prerequisites)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const actionRows: Parameters<typeof computePlanHash>[1] = [];
-  planSpec.actions.forEach((a, i) => {
+  for (const a of actionRows) {
     insertAction.run(
       planId,
-      i,
+      a.order_index,
       a.description,
-      a.expectedImpact,
-      a.risk as RiskLevel,
-      a.rollback,
-      JSON.stringify(a.resources),
+      a.expected_impact,
+      a.risk_level,
+      a.rollback_strategy,
+      a.affected_resources,
       a.reason,
-      JSON.stringify(a.evidenceTitles),
-      a.approvalRequired ? 1 : 0,
-      a.blastRadius ?? null,
-      a.prerequisites ? JSON.stringify(a.prerequisites) : null,
+      a.evidence_refs,
+      a.approval_required,
+      a.blast_radius,
+      a.prerequisites,
     );
-    actionRows.push({
-      order_index: i,
-      description: a.description,
-      expected_impact: a.expectedImpact,
-      risk_level: a.risk as RiskLevel,
-      rollback_strategy: a.rollback,
-      affected_resources: JSON.stringify(a.resources),
-      reason: a.reason,
-      evidence_refs: JSON.stringify(a.evidenceTitles),
-      approval_required: a.approvalRequired ? 1 : 0,
-      blast_radius: a.blastRadius ?? null,
-      prerequisites: a.prerequisites ? JSON.stringify(a.prerequisites) : null,
-    });
-  });
+  }
 
   d.prepare("UPDATE remediation_plans SET hash = ? WHERE id = ?").run(
-    computePlanHash(planSpec.summary, actionRows),
+    computePlanHash(summary, actionRows),
     planId,
   );
 
-  addEvent(incidentId, "remediation_proposed", "Remediation plan proposed", planSpec.summary, CLANKER_AGENT_NAME, created);
-  addEvent(incidentId, "approval_requested", "Human approval requested", "Remediation plan awaiting review.", INVESTIGATOR_NAME, created);
+  addEvent(incidentId, "remediation_proposed", "Remediation plan proposed", summary, DEFAULT_AGENT_NAME, created);
+  addEvent(incidentId, "approval_requested", "Human approval requested", "Remediation plan awaiting review.", null, created);
   updateIncidentStatus(incidentId, "awaiting_approval");
 
   return getPlan(incidentId) as PlanWithActions;
 }
 
-export function approvePlan(incidentId: string, approvedBy: string): PlanWithActions {
+/** How long an approval stays valid before execution is refused. */
+export const APPROVAL_TTL_MS = Number(process.env.APPROVAL_TTL_MS ?? 60 * 60 * 1000);
+
+/**
+ * Approves a plan for the current user. Records the approver identity, the
+ * plan fingerprint and the approval expiry in the approvals table. The
+ * approval only applies to the exact plan version that was hashed.
+ */
+export function approvePlan(
+  incidentId: string,
+  approvedBy: { id: string; name: string },
+): PlanWithActions {
   const plan = getPlan(incidentId);
   if (!plan) throw new PlanError("No remediation plan exists for this incident.");
   if (plan.status !== "pending_approval") {
     throw new PlanError(`Plan cannot be approved in its current state (${plan.status}).`);
   }
   const at = nowIso();
-  if (!plan.hash) {
-    db()
-      .prepare("UPDATE remediation_plans SET hash = ? WHERE id = ?")
-      .run(computePlanHash(plan.summary, plan.actions), plan.id);
+  const expiresAt = new Date(Date.now() + APPROVAL_TTL_MS).toISOString();
+  const hash = plan.hash ?? computePlanHash(plan.summary, plan.actions);
+
+  d: {
+    const d = db();
+    d.transaction(() => {
+      d.prepare(
+        "UPDATE remediation_plans SET hash = ?, status = 'approved', approved_at = ?, approved_by = ?, approval_expires_at = ? WHERE id = ?",
+      ).run(hash, at, approvedBy.name, expiresAt, plan.id);
+      d.prepare(
+        "INSERT INTO approvals (plan_id, approver_id, approver_name, plan_hash, approved_at, expires_at, status) VALUES (?, ?, ?, ?, ?, ?, 'active')",
+      ).run(plan.id, approvedBy.id, approvedBy.name, hash, at, expiresAt);
+    })();
   }
-  db()
-    .prepare("UPDATE remediation_plans SET status = 'approved', approved_at = ?, approved_by = ? WHERE id = ?")
-    .run(at, approvedBy, plan.id);
-  addEvent(incidentId, "approval_granted", "Approval granted", `Remediation plan approved by ${approvedBy}.`, approvedBy, at);
+
+  addEvent(incidentId, "approval_granted", "Approval granted", `Remediation plan approved by ${approvedBy.name}.`, approvedBy.name, at);
   updateIncidentStatus(incidentId, "approved");
   return getPlan(incidentId) as PlanWithActions;
 }
 
-export function rejectPlan(incidentId: string, reason: string): PlanWithActions {
+export function rejectPlan(incidentId: string, reason: string, rejectedBy: string): PlanWithActions {
   const plan = getPlan(incidentId);
   if (!plan) throw new PlanError("No remediation plan exists for this incident.");
   if (plan.status !== "pending_approval") {
@@ -189,16 +189,16 @@ export function rejectPlan(incidentId: string, reason: string): PlanWithActions 
   db()
     .prepare("UPDATE remediation_plans SET status = 'rejected', rejection_reason = ? WHERE id = ?")
     .run(reason, plan.id);
-  addEvent(incidentId, "approval_rejected", "Approval rejected", reason, INVESTIGATOR_NAME, at);
+  addEvent(incidentId, "approval_rejected", "Approval rejected", reason, rejectedBy, at);
   updateIncidentStatus(incidentId, "investigating");
   return getPlan(incidentId) as PlanWithActions;
 }
 
 /**
- * Records a "plan viewed" audit event. Called when the remediation plan page
- * renders so the review trail shows who opened the plan for review.
+ * Records a "plan viewed" audit event when the remediation plan page
+ * renders, so the review trail shows who opened the plan for review.
  */
-export function recordPlanViewed(incidentId: string): void {
+export function recordPlanViewed(incidentId: string, viewerName: string | null): void {
   const plan = getPlan(incidentId);
   if (!plan) return;
   addEvent(
@@ -206,6 +206,24 @@ export function recordPlanViewed(incidentId: string): void {
     "plan_viewed",
     "Plan viewed",
     `Remediation plan #${plan.id} was opened for review.`,
-    null,
+    viewerName,
+  );
+}
+
+/** Active approval for a plan, if any. */
+export function activeApproval(planId: number): {
+  id: number;
+  approver_id: string;
+  approver_name: string;
+  plan_hash: string;
+  approved_at: string;
+  expires_at: string;
+} | null {
+  return (
+    (db()
+      .prepare(
+        "SELECT * FROM approvals WHERE plan_id = ? AND status = 'active' ORDER BY approved_at DESC LIMIT 1",
+      )
+      .get(planId) as ReturnType<typeof activeApproval>) ?? null
   );
 }

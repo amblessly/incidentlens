@@ -1,7 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import type { HypothesisRow } from "@/lib/services/incidents";
+import type { EvidenceRow, HypothesisRow } from "@/lib/services/incidents";
 import { cn } from "@/lib/utils";
 
 function parseList(value: string | null): string[] {
@@ -14,7 +14,24 @@ function parseList(value: string | null): string[] {
   }
 }
 
-export function HypothesesList({ hypotheses }: { hypotheses: HypothesisRow[] }) {
+/**
+ * Supporting/contradicting evidence may be stored as evidence DB ids (new
+ * investigation runs) or as evidence titles (seeded demo data). Resolve both
+ * to human-readable titles for display.
+ */
+function resolveEvidenceRefs(refs: string[], evidence: EvidenceRow[]): string[] {
+  if (refs.length === 0) return [];
+  const byId = new Map(evidence.map((e) => [String(e.id), e.title]));
+  return refs.map((ref) => byId.get(ref) ?? ref);
+}
+
+export function HypothesesList({
+  hypotheses,
+  evidence,
+}: {
+  hypotheses: HypothesisRow[];
+  evidence: EvidenceRow[];
+}) {
   if (hypotheses.length === 0) return null;
 
   return (
@@ -26,8 +43,8 @@ export function HypothesesList({ hypotheses }: { hypotheses: HypothesisRow[] }) 
         {hypotheses.map((h) => {
           const pct = Math.round(h.confidence * 100);
           const isSelected = h.is_selected === 1;
-          const evidenceTitles = parseList(h.supporting_evidence);
-          const contradicting = parseList(h.contradicting_evidence);
+          const evidenceTitles = resolveEvidenceRefs(parseList(h.supporting_evidence), evidence);
+          const contradicting = resolveEvidenceRefs(parseList(h.contradicting_evidence), evidence);
           const missing = parseList(h.missing_evidence);
           return (
             <div

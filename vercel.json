@@ -1,0 +1,17 @@
+{
+  "buildCommand": "npm run build",
+  "devCommand": "npm run dev",
+  "installCommand": "npm install",
+  "framework": "nextjs",
+  "regions": ["sgp1"],
+  "functions": {
+    "src/app/**/*.ts": {
+      "maxDuration": 60
+    }
+  },
+  "env": {
+    "INCIDENTLENS_MODE": "demo",
+    "SESSION_SECRET": "@session-secret",
+    "DATABASE_URL": "@database-url"
+  }
+}

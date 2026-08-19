@@ -37,9 +37,22 @@ interface PlanReviewProps {
   incidentStatus: string;
   investigationCompleted: boolean;
   plan: PlanWithActions | null;
+  permissions: {
+    generate: boolean;
+    approve: boolean;
+    reject: boolean;
+    execute: boolean;
+    rollback: boolean;
+  };
 }
 
 type PlanAction = "generate" | "approve" | "reject" | "execute" | "rollback";
+
+function apiErrorMessage(error: { message?: string } | string | undefined): string | undefined {
+  if (!error) return undefined;
+  if (typeof error === "string") return error;
+  return error.message;
+}
 
 function parseList(value: string): string[] {
   try {
@@ -55,6 +68,7 @@ export function PlanReview({
   incidentStatus,
   investigationCompleted,
   plan,
+  permissions,
 }: PlanReviewProps) {
   const router = useRouter();
   const [busy, setBusy] = useState<null | PlanAction>(null);
@@ -68,9 +82,9 @@ export function PlanReview({
           method: "POST",
           cache: "no-store",
         });
-        const body = (await res.json()) as { error?: string };
+        const body = (await res.json()) as { error?: { message?: string } | string };
         if (!res.ok) {
-          toast.error(body.error ?? "Failed to generate plan.");
+          toast.error(apiErrorMessage(body.error) ?? "Failed to generate plan.");
           return;
         }
         toast.success("Remediation plan generated.");
@@ -81,9 +95,9 @@ export function PlanReview({
           body: JSON.stringify({ action, ...payload }),
           cache: "no-store",
         });
-        const body = (await res.json()) as { error?: string };
+        const body = (await res.json()) as { error?: { message?: string } | string };
         if (!res.ok) {
-          toast.error(body.error ?? "Action failed.");
+          toast.error(apiErrorMessage(body.error) ?? "Action failed.");
           return;
         }
         if (action === "approve") {
@@ -151,7 +165,7 @@ export function PlanReview({
           <p className="text-sm text-muted-foreground">
             Generate a human-reviewed remediation plan from the investigation evidence.
           </p>
-          <Button onClick={() => runAction("generate")} disabled={busy !== null}>
+          <Button onClick={() => runAction("generate")} disabled={busy !== null || !permissions.generate}>
             {busy === "generate" ? (
               <Loader2 className="animate-spin" />
             ) : (
@@ -183,11 +197,11 @@ export function PlanReview({
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {plan.status === "pending_approval" && (
+              {plan.status === "pending_approval" && (permissions.approve || permissions.reject) && (
                 <>
                   <Dialog>
                     <DialogTrigger asChild>
-                      <Button disabled={busy !== null}>
+                      <Button disabled={busy !== null || !permissions.approve}>
                         {busy === "approve" ? (
                           <Loader2 className="animate-spin" />
                         ) : (
@@ -230,7 +244,7 @@ export function PlanReview({
                     <DialogTrigger asChild>
                       <Button
                         variant="outline"
-                        disabled={busy !== null}
+                        disabled={busy !== null || !permissions.reject}
                         className="border-destructive/30 text-destructive hover:bg-destructive/10 dark:border-destructive/40"
                       >
                         <ShieldX data-icon="inline-start" />
@@ -276,7 +290,7 @@ export function PlanReview({
               {plan.status === "approved" && incidentStatus !== "resolved" && (
                 <Dialog>
                   <DialogTrigger asChild>
-                    <Button disabled={busy !== null || manualRecovery}>
+                    <Button disabled={busy !== null || manualRecovery || !permissions.execute}>
                       {busy === "execute" ? (
                         <Loader2 className="animate-spin" />
                       ) : (
@@ -322,7 +336,7 @@ export function PlanReview({
                 </Dialog>
               )}
 
-              {plan.status === "executed" && (
+              {plan.status === "executed" && permissions.rollback && (
                 <Dialog>
                   <DialogTrigger asChild>
                     <Button variant="outline" disabled={busy !== null}>
@@ -363,7 +377,7 @@ export function PlanReview({
                 </Dialog>
               )}
 
-              {plan.status === "rejected" && (
+              {plan.status === "rejected" && permissions.generate && (
                 <Button onClick={() => runAction("generate")} disabled={busy !== null}>
                   {busy === "generate" ? <Loader2 className="animate-spin" /> : null}
                   Regenerate plan

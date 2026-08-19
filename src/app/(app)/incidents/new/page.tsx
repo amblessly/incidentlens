@@ -2,13 +2,16 @@ import { IncidentForm } from "@/components/incidents/incident-form";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 import { listServices } from "@/lib/services/incidents";
+import { listWorkspaces, listConnections } from "@/lib/services/workspaces";
 
 export const metadata = {
   title: "New incident",
 };
 
-export default function NewIncidentPage() {
-  const services = listServices();
+export default async function NewIncidentPage() {
+  const services = await listServices();
+  const workspace = listWorkspaces()[0] ?? null;
+  const providers = workspace ? listConnections(workspace.id) : [];
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6">
@@ -24,7 +27,7 @@ export default function NewIncidentPage() {
           <CardTitle>Incident details</CardTitle>
         </CardHeader>
         <CardContent>
-          <IncidentForm services={services} />
+          <IncidentForm services={services} providers={providers} />
         </CardContent>
       </Card>
     </div>

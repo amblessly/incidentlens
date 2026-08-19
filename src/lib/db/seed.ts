@@ -1,14 +1,58 @@
 import type { Database } from "@/lib/db";
-import { CLANKER_AGENT_NAME, INVESTIGATOR_NAME } from "@/lib/constants";
+import { DEFAULT_AGENT_NAME, INVESTIGATOR_NAME } from "@/lib/constants";
 import { INVESTIGATION_PROMPT_VERSION } from "@/lib/clanker/prompts";
+import { hashPassword } from "@/lib/auth/password";
 import { buildScenarios, type DemoScenario } from "@/lib/demo/scenarios";
 import type { InvestigationResultData } from "@/lib/types";
 
 const USERS = [
-  { id: "u-ava", name: INVESTIGATOR_NAME, email: "ava@incidentlens.dev", role: "On-call engineer" },
-  { id: "u-jordan", name: "Jordan Reyes", email: "jordan@incidentlens.dev", role: "Platform engineer" },
-  { id: "u-maya", name: "Maya Patel", email: "maya@incidentlens.dev", role: "Backend engineer" },
+  {
+    id: "u-ava",
+    name: INVESTIGATOR_NAME,
+    email: "ava@incidentlens.dev",
+    role: "admin",
+    password: "incidentlens-demo",
+  },
+  {
+    id: "u-jordan",
+    name: "Jordan Reyes",
+    email: "jordan@incidentlens.dev",
+    role: "engineer",
+    password: "incidentlens-demo",
+  },
+  {
+    id: "u-maya",
+    name: "Maya Patel",
+    email: "maya@incidentlens.dev",
+    role: "engineer",
+    password: "incidentlens-demo",
+  },
 ];
+
+const DEMO_WORKSPACE = {
+  id: "ws-demo",
+  name: "Demo Workspace",
+  slug: "demo",
+};
+
+const DEMO_ENVIRONMENT = {
+  id: "env-demo-prod",
+  workspace_id: DEMO_WORKSPACE.id,
+  name: "Production",
+  kind: "production",
+};
+
+const DEMO_CONNECTION = {
+  id: "conn-demo",
+  workspace_id: DEMO_WORKSPACE.id,
+  environment_id: DEMO_ENVIRONMENT.id,
+  provider_type: "demo",
+  name: "Demo provider",
+  status: "connected",
+  last_tested_at: null,
+  last_error: null,
+  config: null,
+};
 
 const SERVICES = [
   { id: "svc-api", name: "api-production", team: "Core API", kind: "service" },
@@ -82,7 +126,16 @@ export function seedIfEmpty(db: Database): void {
   const ago = (m: number) => new Date(now.getTime() - m * 60_000).toISOString();
 
   const insertUser = db.prepare(
-    "INSERT INTO users (id, name, email, role, created_at) VALUES (@id, @name, @email, @role, @created_at)",
+    "INSERT INTO users (id, name, email, role, password_hash, workspace_id, created_at) VALUES (@id, @name, @email, @role, @password_hash, @workspace_id, @created_at)",
+  );
+  const insertWorkspace = db.prepare(
+    "INSERT INTO workspaces (id, name, slug, created_at) VALUES (@id, @name, @slug, @created_at)",
+  );
+  const insertEnvironment = db.prepare(
+    "INSERT INTO environments (id, workspace_id, name, kind, created_at) VALUES (@id, @workspace_id, @name, @kind, @created_at)",
+  );
+  const insertConnection = db.prepare(
+    "INSERT INTO provider_connections (id, workspace_id, environment_id, provider_type, name, status, last_tested_at, last_error, config, created_at) VALUES (@id, @workspace_id, @environment_id, @provider_type, @name, @status, @last_tested_at, @last_error, @config, @created_at)",
   );
   const insertService = db.prepare(
     "INSERT INTO services (id, name, team, kind, created_at) VALUES (@id, @name, @team, @kind, @created_at)",
@@ -120,9 +173,21 @@ export function seedIfEmpty(db: Database): void {
 
   const scenarios = buildScenarios(now);
 
-  db.transaction(() => {
+db.transaction(() => {
+    insertWorkspace.run({ ...DEMO_WORKSPACE, created_at: ago(60 * 24 * 30) });
+    insertEnvironment.run({ ...DEMO_ENVIRONMENT, created_at: ago(60 * 24 * 30) });
+    insertConnection.run({ ...DEMO_CONNECTION, created_at: ago(60 * 24 * 30) });
+
     for (const u of USERS) {
-      insertUser.run({ ...u, created_at: ago(60 * 24 * 30) });
+      insertUser.run({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        password_hash: hashPassword(u.password),
+        workspace_id: DEMO_WORKSPACE.id,
+        created_at: ago(60 * 24 * 30),
+      });
     }
     for (const s of SERVICES) {
       insertService.run({ ...s, created_at: ago(60 * 24 * 60) });
@@ -207,7 +272,7 @@ export function seedIfEmpty(db: Database): void {
           actor: e.type.startsWith("approval") || e.type === "note"
             ? INVESTIGATOR_NAME
             : hasInvestigation
-              ? CLANKER_AGENT_NAME
+              ? DEFAULT_AGENT_NAME
               : INVESTIGATOR_NAME,
           created_at: ago(e.atAgo),
         });
@@ -248,7 +313,7 @@ export function seedIfEmpty(db: Database): void {
         const runResult = insertRun.run({
           incident_id: incident.id,
           status: "completed",
-          agent: CLANKER_AGENT_NAME,
+          agent: DEFAULT_AGENT_NAME,
           provider: "clanker-demo",
           prompt_version: INVESTIGATION_PROMPT_VERSION,
           initiated_by: INVESTIGATOR_NAME,

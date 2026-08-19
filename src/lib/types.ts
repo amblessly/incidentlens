@@ -83,6 +83,13 @@ export interface Incident {
   repository: string | null;
   alert_payload: string | null;
   is_demo: number;
+  source: string | null;
+  workspace_id: string | null;
+  environment_id: string | null;
+  environment: string | null;
+  idempotency_key: string | null;
+  request_id: string | null;
+  metadata: string | null;
 }
 
 export interface IncidentEvent {

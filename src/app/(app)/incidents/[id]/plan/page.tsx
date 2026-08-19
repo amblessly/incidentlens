@@ -6,6 +6,8 @@ import { PlanReview } from "@/components/plan/plan-review";
 import { getIncidentFull } from "@/lib/services/incidents";
 import { hasCompletedInvestigation } from "@/lib/services/investigation";
 import { recordPlanViewed } from "@/lib/services/plans";
+import { appUiState } from "@/lib/ui-state";
+import { hasPermission } from "@/lib/auth/permissions";
 
 export const metadata = {
   title: "Remediation plan",
@@ -16,7 +18,17 @@ export default async function IncidentPlanPage(props: PageProps<"/incidents/[id]
   const incident = getIncidentFull(id);
   if (!incident) notFound();
 
-  recordPlanViewed(id);
+  const state = await appUiState();
+  recordPlanViewed(id, state.user?.name ?? "anonymous");
+
+  const role = state.user?.role ?? "viewer";
+  const permissions = {
+    generate: hasPermission(role, "plan.generate"),
+    approve: hasPermission(role, "plan.approve"),
+    reject: hasPermission(role, "plan.reject"),
+    execute: hasPermission(role, "plan.execute"),
+    rollback: hasPermission(role, "plan.rollback"),
+  };
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6">
@@ -26,6 +38,7 @@ export default async function IncidentPlanPage(props: PageProps<"/incidents/[id]
         incidentStatus={incident.status}
         investigationCompleted={hasCompletedInvestigation(incident.id)}
         plan={incident.plan}
+        permissions={permissions}
       />
     </div>
   );

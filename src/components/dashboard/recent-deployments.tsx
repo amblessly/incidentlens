@@ -15,10 +15,15 @@ export function RecentDeployments({ deployments }: { deployments: Deployment[] }
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-1">
+        {deployments.length === 0 && (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            No deployments on record for this environment.
+          </p>
+        )}
         {deployments.map((d) => (
           <div
             key={d.id}
-            className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50"
+            className="list-item-hover flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50"
           >
             <div className="flex min-w-0 flex-col">
               <code className="truncate font-mono text-xs text-foreground">{d.service}</code>

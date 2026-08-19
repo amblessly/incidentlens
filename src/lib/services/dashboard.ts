@@ -1,8 +1,12 @@
 import { db } from "@/lib/db";
+import { isDemoMode } from "@/lib/config";
 import { listIncidents } from "@/lib/services/incidents";
 import type { Deployment, IncidentStatus, Severity } from "@/lib/types";
 
 export type ServiceHealthStatus = "healthy" | "warning" | "critical";
+
+const DEMO_FILTER = isDemoMode() ? "" : " AND i.is_demo = 0";
+const DEMO_FILTER_NO_ALIAS = isDemoMode() ? "" : " AND is_demo = 0";
 
 export interface ServiceHealth {
   name: string;
@@ -46,9 +50,11 @@ export interface DashboardData {
 
 export function getDashboardData(): DashboardData {
   const d = db();
+  const demoFilter = DEMO_FILTER;
+  const demoFilterNoAlias = DEMO_FILTER_NO_ALIAS;
 
   const statusCounts = d
-    .prepare("SELECT status, COUNT(*) AS n FROM incidents GROUP BY status")
+    .prepare(`SELECT status, COUNT(*) AS n FROM incidents i WHERE 1=1${demoFilter} GROUP BY status`)
     .all() as { status: IncidentStatus; n: number }[];
   const countFor = (s: IncidentStatus) =>
     statusCounts.find((r) => r.status === s)?.n ?? 0;
@@ -60,7 +66,7 @@ export function getDashboardData(): DashboardData {
 
   const mttr = d
     .prepare(
-      "SELECT AVG((julianday(resolved_at) - julianday(started_at)) * 1440) AS avg FROM incidents WHERE resolved_at IS NOT NULL",
+      `SELECT AVG((julianday(resolved_at) - julianday(started_at)) * 1440) AS avg FROM incidents WHERE resolved_at IS NOT NULL${demoFilterNoAlias}`,
     )
     .get() as { avg: number | null };
 
@@ -80,7 +86,7 @@ export function getDashboardData(): DashboardData {
               SUM(CASE WHEN i.status != 'resolved' THEN 1 ELSE 0 END) AS open_count,
               SUM(CASE WHEN i.status = 'resolved' THEN 1 ELSE 0 END) AS resolved_count
        FROM services s
-       LEFT JOIN incidents i ON i.service = s.name
+       LEFT JOIN incidents i ON i.service = s.name${demoFilter}
        GROUP BY s.id
        ORDER BY s.name ASC`,
     )
@@ -96,7 +102,7 @@ export function getDashboardData(): DashboardData {
     const openCount = s.open_count ?? 0;
     const hasSev1 = d
       .prepare(
-        "SELECT COUNT(*) AS n FROM incidents WHERE service = ? AND status != 'resolved' AND severity = 'SEV-1'",
+        `SELECT COUNT(*) AS n FROM incidents WHERE service = ? AND status != 'resolved' AND severity = 'SEV-1'${demoFilterNoAlias}`,
       )
       .get(s.name) as { n: number };
     const status: ServiceHealthStatus =
@@ -119,7 +125,7 @@ export function getDashboardData(): DashboardData {
     .prepare(
       `SELECT e.incident_id, i.title AS incident_title, e.type, e.title, e.created_at
        FROM incident_events e
-       JOIN incidents i ON i.id = e.incident_id
+       JOIN incidents i ON i.id = e.incident_id${demoFilter}
        WHERE e.type IN ('investigation_started','infrastructure_queried','logs_inspected','changes_inspected','deployment_discovered','evidence_correlated','hypothesis_generated','remediation_proposed','approval_requested','approval_granted','remediation_executed','incident_resolved')
        ORDER BY e.created_at DESC
        LIMIT 8`,
@@ -163,7 +169,7 @@ function buildDayBuckets(d: ReturnType<typeof db>): DayBuckets[] {
   }
 
   const rows = d
-    .prepare("SELECT started_at, severity FROM incidents")
+    .prepare(`SELECT started_at, severity FROM incidents WHERE 1=1${DEMO_FILTER_NO_ALIAS}`)
     .all() as { started_at: string; severity: Severity }[];
 
   const dayIndex = new Map(days.map((d2, i) => [d2.date, i]));

@@ -18,8 +18,15 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { SEVERITIES, SEVERITY_META } from "@/lib/constants";
 
+interface ProviderOption {
+  id: string;
+  name: string;
+  provider_type: string;
+}
+
 interface IncidentFormProps {
   services: string[];
+  providers?: ProviderOption[];
 }
 
 function toLocalInputValue(iso: string): string {
@@ -28,12 +35,13 @@ function toLocalInputValue(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export function IncidentForm({ services }: IncidentFormProps) {
+export function IncidentForm({ services, providers = [] }: IncidentFormProps) {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [service, setService] = useState("");
   const [severity, setSeverity] = useState("");
+  const [providerId, setProviderId] = useState("");
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -50,7 +58,7 @@ export function IncidentForm({ services }: IncidentFormProps) {
     }
 
     const form = new FormData(e.currentTarget);
-    const payload = {
+    const payload: Record<string, unknown> = {
       title: String(form.get("title") ?? ""),
       service,
       severity,
@@ -60,6 +68,7 @@ export function IncidentForm({ services }: IncidentFormProps) {
       repository: String(form.get("repository") ?? "").trim() || null,
       alertPayload: String(form.get("alertPayload") ?? "").trim() || null,
     };
+    if (providerId) payload.providerConnectionId = providerId;
 
     try {
       const res = await fetch("/api/incidents", {
@@ -68,11 +77,17 @@ export function IncidentForm({ services }: IncidentFormProps) {
         body: JSON.stringify(payload),
       });
       const body = (await res.json()) as {
-        error?: string;
+        error?: { message?: string } | string;
         incident?: { id: string };
       };
       if (!res.ok || !body.incident) {
-        toast.error(body.error ?? "Failed to create incident.");
+        const message =
+          body.error && typeof body.error === "object"
+            ? body.error.message
+            : typeof body.error === "string"
+              ? body.error
+              : undefined;
+        toast.error(message ?? "Failed to create incident.");
         return;
       }
       toast.success(`Incident ${body.incident.id} created.`);
@@ -102,18 +117,25 @@ export function IncidentForm({ services }: IncidentFormProps) {
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="grid gap-2">
           <Label htmlFor="service">Affected service</Label>
-          <Select value={service} onValueChange={setService} aria-invalid={Boolean(errors.service)}>
-            <SelectTrigger id="service" className="w-full" aria-invalid={Boolean(errors.service)}>
-              <SelectValue placeholder="Select service" />
-            </SelectTrigger>
-            <SelectContent>
-              {services.map((s) => (
-                <SelectItem key={s} value={s}>
-                  {s}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {services.length === 0 ? (
+            <p className="rounded-lg border border-dashed px-3 py-2.5 text-sm text-muted-foreground">
+              No services discovered yet. In live mode, services come from the connected
+              infrastructure provider — configure one in Settings or ingest incidents via the API.
+            </p>
+          ) : (
+            <Select value={service} onValueChange={setService} aria-invalid={Boolean(errors.service)}>
+              <SelectTrigger id="service" className="w-full" aria-invalid={Boolean(errors.service)}>
+                <SelectValue placeholder="Select service" />
+              </SelectTrigger>
+              <SelectContent>
+                {services.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {s}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           {errors.service && <p className="text-sm text-destructive">{errors.service}</p>}
         </div>
         <div className="grid gap-2">
@@ -132,6 +154,28 @@ export function IncidentForm({ services }: IncidentFormProps) {
           </Select>
           {errors.severity && <p className="text-sm text-destructive">{errors.severity}</p>}
         </div>
+      </div>
+
+      <div className="grid gap-2">
+        <Label htmlFor="providerId">Investigation provider (optional)</Label>
+        {providers.length === 0 ? (
+          <p className="rounded-lg border border-dashed px-3 py-2.5 text-sm text-muted-foreground">
+            No providers configured. Add one in Settings to enable infrastructure investigation.
+          </p>
+        ) : (
+          <Select value={providerId} onValueChange={setProviderId}>
+            <SelectTrigger id="providerId" className="w-full">
+              <SelectValue placeholder="Auto-detect (first available)" />
+            </SelectTrigger>
+            <SelectContent>
+              {providers.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name} ({p.provider_type})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
       </div>
 
       <div className="grid gap-2">
