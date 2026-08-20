@@ -11,7 +11,7 @@ export const metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function AuditPage() {
-  const events = listAuditEvents(200);
+  const events = await listAuditEvents(200);
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6">

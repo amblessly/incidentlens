@@ -15,17 +15,17 @@ import type { RiskLevel } from "@/lib/types";
 
 export class PlanError extends Error {}
 
-export function getPlan(incidentId: string): PlanWithActions | null {
-  return getIncidentFull(incidentId)?.plan ?? null;
+export async function getPlan(incidentId: string): Promise<PlanWithActions | null> {
+  return (await getIncidentFull(incidentId))?.plan ?? null;
 }
 
 /** Load the latest completed investigation result for an incident. */
-export function latestInvestigationResult(incidentId: string): EngineResult | null {
-  const run = db()
+export async function latestInvestigationResult(incidentId: string): Promise<EngineResult | null> {
+  const run = (await db()
     .prepare(
       "SELECT result FROM investigation_runs WHERE incident_id = ? AND status = 'completed' ORDER BY started_at DESC LIMIT 1",
     )
-    .get(incidentId) as { result: string | null } | undefined;
+    .get(incidentId)) as { result: string | null } | undefined;
   if (!run?.result) return null;
   try {
     return JSON.parse(run.result) as EngineResult;
@@ -66,32 +66,32 @@ function toPlanActions(engineActions: EngineAction[]): {
  * explicit rollback strategy; actions without a safe rollback are marked
  * "Manual recovery required" and cannot be executed automatically.
  */
-export function generatePlan(incidentId: string): PlanWithActions {
-  const incident = getIncident(incidentId);
+export async function generatePlan(incidentId: string): Promise<PlanWithActions> {
+  const incident = await getIncident(incidentId);
   if (!incident) throw new PlanError("Incident not found.");
   if (incident.status === "resolved") {
     throw new PlanError("Resolved incidents cannot have a new remediation plan.");
   }
 
-  const existing = getPlan(incidentId);
+  const existing = await getPlan(incidentId);
   if (existing && existing.status !== "rejected") {
     throw new PlanError("A remediation plan already exists for this incident.");
   }
 
-  if (!hasCompletedInvestigation(incidentId)) {
+  if (!(await hasCompletedInvestigation(incidentId))) {
     throw new PlanError(
       "Investigation must complete before a remediation plan can be generated.",
     );
   }
 
-  const result = latestInvestigationResult(incidentId);
+  const result = await latestInvestigationResult(incidentId);
   if (!result) {
     throw new PlanError("No investigation result is available for this incident.");
   }
 
   const d = db();
   if (existing) {
-    d.prepare("DELETE FROM remediation_plans WHERE id = ?").run(existing.id);
+    await d.prepare("DELETE FROM remediation_plans WHERE id = ?").run(existing.id);
   }
 
   const { actions: actionRows, hasManualRecovery } = toPlanActions(result.recommendedActions);
@@ -101,7 +101,7 @@ export function generatePlan(incidentId: string): PlanWithActions {
 
   const created = nowIso();
 
-  const planResult = d
+  const planResult = await d
     .prepare(
       "INSERT INTO remediation_plans (incident_id, status, summary, created_at) VALUES (?, 'pending_approval', ?, ?)",
     )
@@ -113,7 +113,7 @@ export function generatePlan(incidentId: string): PlanWithActions {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   for (const a of actionRows) {
-    insertAction.run(
+    await insertAction.run(
       planId,
       a.order_index,
       a.description,
@@ -129,16 +129,16 @@ export function generatePlan(incidentId: string): PlanWithActions {
     );
   }
 
-  d.prepare("UPDATE remediation_plans SET hash = ? WHERE id = ?").run(
+  await d.prepare("UPDATE remediation_plans SET hash = ? WHERE id = ?").run(
     computePlanHash(summary, actionRows),
     planId,
   );
 
-  addEvent(incidentId, "remediation_proposed", "Remediation plan proposed", summary, DEFAULT_AGENT_NAME, created);
-  addEvent(incidentId, "approval_requested", "Human approval requested", "Remediation plan awaiting review.", null, created);
-  updateIncidentStatus(incidentId, "awaiting_approval");
+  await addEvent(incidentId, "remediation_proposed", "Remediation plan proposed", summary, DEFAULT_AGENT_NAME, created);
+  await addEvent(incidentId, "approval_requested", "Human approval requested", "Remediation plan awaiting review.", null, created);
+  await updateIncidentStatus(incidentId, "awaiting_approval");
 
-  return getPlan(incidentId) as PlanWithActions;
+  return (await getPlan(incidentId)) as PlanWithActions;
 }
 
 /** How long an approval stays valid before execution is refused. */
@@ -149,11 +149,11 @@ export const APPROVAL_TTL_MS = Number(process.env.APPROVAL_TTL_MS ?? 60 * 60 * 1
  * plan fingerprint and the approval expiry in the approvals table. The
  * approval only applies to the exact plan version that was hashed.
  */
-export function approvePlan(
+export async function approvePlan(
   incidentId: string,
   approvedBy: { id: string; name: string },
-): PlanWithActions {
-  const plan = getPlan(incidentId);
+): Promise<PlanWithActions> {
+  const plan = await getPlan(incidentId);
   if (!plan) throw new PlanError("No remediation plan exists for this incident.");
   if (plan.status !== "pending_approval") {
     throw new PlanError(`Plan cannot be approved in its current state (${plan.status}).`);
@@ -162,46 +162,54 @@ export function approvePlan(
   const expiresAt = new Date(Date.now() + APPROVAL_TTL_MS).toISOString();
   const hash = plan.hash ?? computePlanHash(plan.summary, plan.actions);
 
-  d: {
+  {
     const d = db();
-    d.transaction(() => {
-      d.prepare(
-        "UPDATE remediation_plans SET hash = ?, status = 'approved', approved_at = ?, approved_by = ?, approval_expires_at = ? WHERE id = ?",
-      ).run(hash, at, approvedBy.name, expiresAt, plan.id);
-      d.prepare(
-        "INSERT INTO approvals (plan_id, approver_id, approver_name, plan_hash, approved_at, expires_at, status) VALUES (?, ?, ?, ?, ?, ?, 'active')",
-      ).run(plan.id, approvedBy.id, approvedBy.name, hash, at, expiresAt);
-    })();
+    await d.transaction(async () => {
+      await d
+        .prepare(
+          "UPDATE remediation_plans SET hash = ?, status = 'approved', approved_at = ?, approved_by = ?, approval_expires_at = ? WHERE id = ?",
+        )
+        .run(hash, at, approvedBy.name, expiresAt, plan.id);
+      await d
+        .prepare(
+          "INSERT INTO approvals (plan_id, approver_id, approver_name, plan_hash, approved_at, expires_at, status) VALUES (?, ?, ?, ?, ?, ?, 'active')",
+        )
+        .run(plan.id, approvedBy.id, approvedBy.name, hash, at, expiresAt);
+    });
   }
 
-  addEvent(incidentId, "approval_granted", "Approval granted", `Remediation plan approved by ${approvedBy.name}.`, approvedBy.name, at);
-  updateIncidentStatus(incidentId, "approved");
-  return getPlan(incidentId) as PlanWithActions;
+  await addEvent(incidentId, "approval_granted", "Approval granted", `Remediation plan approved by ${approvedBy.name}.`, approvedBy.name, at);
+  await updateIncidentStatus(incidentId, "approved");
+  return (await getPlan(incidentId)) as PlanWithActions;
 }
 
-export function rejectPlan(incidentId: string, reason: string, rejectedBy: string): PlanWithActions {
-  const plan = getPlan(incidentId);
+export async function rejectPlan(
+  incidentId: string,
+  reason: string,
+  rejectedBy: string,
+): Promise<PlanWithActions> {
+  const plan = await getPlan(incidentId);
   if (!plan) throw new PlanError("No remediation plan exists for this incident.");
   if (plan.status !== "pending_approval") {
     throw new PlanError(`Plan cannot be rejected in its current state (${plan.status}).`);
   }
   const at = nowIso();
-  db()
+  await db()
     .prepare("UPDATE remediation_plans SET status = 'rejected', rejection_reason = ? WHERE id = ?")
     .run(reason, plan.id);
-  addEvent(incidentId, "approval_rejected", "Approval rejected", reason, rejectedBy, at);
-  updateIncidentStatus(incidentId, "investigating");
-  return getPlan(incidentId) as PlanWithActions;
+  await addEvent(incidentId, "approval_rejected", "Approval rejected", reason, rejectedBy, at);
+  await updateIncidentStatus(incidentId, "investigating");
+  return (await getPlan(incidentId)) as PlanWithActions;
 }
 
 /**
  * Records a "plan viewed" audit event when the remediation plan page
  * renders, so the review trail shows who opened the plan for review.
  */
-export function recordPlanViewed(incidentId: string, viewerName: string | null): void {
-  const plan = getPlan(incidentId);
+export async function recordPlanViewed(incidentId: string, viewerName: string | null): Promise<void> {
+  const plan = await getPlan(incidentId);
   if (!plan) return;
-  addEvent(
+  await addEvent(
     incidentId,
     "plan_viewed",
     "Plan viewed",
@@ -210,20 +218,24 @@ export function recordPlanViewed(incidentId: string, viewerName: string | null):
   );
 }
 
-/** Active approval for a plan, if any. */
-export function activeApproval(planId: number): {
+export interface ApprovalRow {
   id: number;
+  plan_id: number;
   approver_id: string;
   approver_name: string;
   plan_hash: string;
   approved_at: string;
   expires_at: string;
-} | null {
+  status: string;
+}
+
+/** Active approval for a plan, if any. */
+export async function activeApproval(planId: number): Promise<ApprovalRow | null> {
   return (
-    (db()
+    ((await db()
       .prepare(
         "SELECT * FROM approvals WHERE plan_id = ? AND status = 'active' ORDER BY approved_at DESC LIMIT 1",
       )
-      .get(planId) as ReturnType<typeof activeApproval>) ?? null
+      .get(planId)) as ApprovalRow | undefined) ?? null
   );
 }

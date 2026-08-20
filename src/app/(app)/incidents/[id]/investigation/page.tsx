@@ -19,10 +19,10 @@ export const metadata = {
 
 export default async function InvestigationPage(props: PageProps<"/incidents/[id]/investigation">) {
   const { id } = await props.params;
-  const incident = getIncidentFull(id);
+  const incident = await getIncidentFull(id);
   if (!incident) notFound();
 
-  const { run, steps } = getInvestigationState(id);
+  const { run, steps } = await getInvestigationState(id);
   const panelSteps: StepRow[] = steps.map((s) => ({
     ...s,
     status: s.status === "done" || s.status === "active" ? s.status : "pending",

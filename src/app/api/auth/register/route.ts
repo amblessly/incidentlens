@@ -23,7 +23,7 @@ export async function POST(request: Request) {
   const rid = requestId(request);
   return withLogContext({ requestId: rid }, async () => {
     try {
-      if (!needsSetup()) {
+      if (!(await needsSetup())) {
         return apiError("Setup already completed.", 409, { code: "SETUP_COMPLETED", request });
       }
 
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
       }
 
       const email = parsed.data.email.toLowerCase();
-      const existing = db().prepare("SELECT id FROM users WHERE email = ?").get(email);
+      const existing = await db().prepare("SELECT id FROM users WHERE email = ?").get(email);
       if (existing) {
         return apiError("A user with this email already exists.", 409, { code: "EMAIL_TAKEN", request });
       }
@@ -42,9 +42,9 @@ export async function POST(request: Request) {
       const userId = `u-${crypto.randomUUID().slice(0, 8)}`;
       const now = new Date().toISOString();
 
-      const workspace = createWorkspace(parsed.data.workspaceName);
-      const environment = createEnvironment(workspace.id, parsed.data.environmentName ?? "production", "production");
-      const connection = createProviderConnection(workspace.id, {
+      const workspace = await createWorkspace(parsed.data.workspaceName);
+      const environment = await createEnvironment(workspace.id, parsed.data.environmentName ?? "production", "production");
+      const connection = await createProviderConnection(workspace.id, {
         environmentId: environment.id,
         providerType: "clanker",
         name: "Default Clanker connection",
@@ -61,14 +61,14 @@ export async function POST(request: Request) {
         }
       }
 
-      db()
+      await db()
         .prepare(
           "INSERT INTO users (id, name, email, password_hash, role, workspace_id, created_at) VALUES (?, ?, ?, ?, 'admin', ?, ?)",
         )
         .run(userId, parsed.data.name, email, passwordHash, workspace.id, now);
 
       const token = createSessionToken(userId);
-      recordAudit({
+      await recordAudit({
         action: "setup.completed",
         detail: `First-run setup: admin ${email}, workspace ${workspace.name}, environment ${environment.name}.`,
         requestId: rid,

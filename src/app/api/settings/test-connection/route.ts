@@ -28,7 +28,7 @@ export async function POST(request: Request) {
         return apiError(parsed.error.issues[0]?.message ?? "Invalid input.", 400, { request });
       }
 
-      const connection = getConnection(parsed.data.connectionId);
+      const connection = await getConnection(parsed.data.connectionId);
       if (!connection) {
         return apiError("Connection not found.", 404, { code: "PROVIDER_CONNECTION_NOT_FOUND", request });
       }
@@ -42,14 +42,14 @@ export async function POST(request: Request) {
         );
       }
 
-      updateConnectionStatus(connection.id, "connecting");
+      await updateConnectionStatus(connection.id, "connecting");
       const startedAt = Date.now();
       try {
         const result = await provider.testConnection();
         const durationMs = Date.now() - startedAt;
-        updateConnectionStatus(connection.id, "connected", { testedAt: new Date().toISOString() });
+        await updateConnectionStatus(connection.id, "connected", { testedAt: new Date().toISOString() });
 
-        recordAudit({
+        await recordAudit({
           action: "connection.test",
           detail: `Connection ${connection.name} (${connection.provider_type}) tested successfully in ${durationMs}ms.`,
           requestId: rid,
@@ -71,8 +71,8 @@ export async function POST(request: Request) {
         );
       } catch (error) {
         const message = providerErrorMessage(error);
-        updateConnectionStatus(connection.id, "error", { error: message });
-        recordAudit({
+        await updateConnectionStatus(connection.id, "error", { error: message });
+        await recordAudit({
           action: "connection.test_failed",
           detail: `Connection ${connection.name} (${connection.provider_type}) test failed: ${message}`,
           requestId: rid,

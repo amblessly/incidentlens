@@ -10,7 +10,7 @@ export async function POST(request: Request) {
   return withLogContext({ requestId: requestId(request) }, async () => {
     const user = await sessionUser();
     if (user) {
-      recordAudit({ action: "auth.logout", detail: `User ${user.email} logged out.`, userId: user.id, userName: user.name, workspaceId: user.workspace_id });
+      await recordAudit({ action: "auth.logout", detail: `User ${user.email} logged out.`, userId: user.id, userName: user.name, workspaceId: user.workspace_id });
     }
     const res = json({ ok: true }, undefined, request);
     res.headers.append("Set-Cookie", clearSessionCookieValue());

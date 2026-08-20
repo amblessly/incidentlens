@@ -19,7 +19,7 @@ export async function GET(request: Request) {
       const q = searchParams.get("q") ?? undefined;
 
       await requireApiAuth(request);
-      const incidents = listIncidents({ severity, status, service, q });
+      const incidents = await listIncidents({ severity, status, service, q });
       return json({ incidents }, undefined, request);
     } catch (error) {
       return errorToResponse(error, request);
@@ -84,7 +84,7 @@ export async function POST(request: Request) {
       }
 
       if (idempotencyKey) {
-        const existing = findByIdempotencyKey(idempotencyKey);
+        const existing = await findByIdempotencyKey(idempotencyKey);
         if (existing) {
           return json(
             { incident: existing, duplicate: true },
@@ -99,13 +99,12 @@ export async function POST(request: Request) {
       const workspaceId =
         principal.kind === "api-key"
           ? principal.key.workspace_id
-          : (principal.user.workspace_id ?? defaultWorkspace()?.id ?? null);
+          : (principal.user.workspace_id ?? (await defaultWorkspace())?.id ?? null);
+      const connections = workspaceId ? await listConnections(workspaceId) : [];
       const environmentId =
-        workspaceId && listConnections(workspaceId).length > 0
-          ? (listConnections(workspaceId)[0].environment_id ?? undefined)
-          : undefined;
+        connections.length > 0 ? (connections[0].environment_id ?? undefined) : undefined;
 
-      const incident = createIncident({
+      const incident = await createIncident({
         title: normalized.title ?? `Alert for ${normalized.service}`,
         service: normalized.service,
         severity: (normalized.severity ?? "SEV-3") as Severity,
@@ -131,7 +130,7 @@ export async function POST(request: Request) {
         providerConnectionId: (normalized as Record<string, unknown>).providerConnectionId as string | null | undefined ?? null,
       });
 
-      recordAudit({
+      await recordAudit({
         action: "incident.ingested",
         detail: `Incident ${incident.id} ingested via ${principal.kind === "api-key" ? "api-key" : "session"}.`,
         requestId: rid,

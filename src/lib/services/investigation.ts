@@ -53,27 +53,27 @@ const STEP_TO_EVENT: Record<string, EventType> = {
   "preparing-remediation": "remediation_proposed",
 };
 
-export function getInvestigationState(incidentId: string): InvestigationState {
-  const run = db()
+export async function getInvestigationState(incidentId: string): Promise<InvestigationState> {
+  const run = (await db()
     .prepare(
       "SELECT * FROM investigation_runs WHERE incident_id = ? ORDER BY started_at DESC LIMIT 1",
     )
-    .get(incidentId) as RunRow | undefined;
+    .get(incidentId)) as RunRow | undefined;
 
   const steps = run
-    ? (db()
+    ? ((await db()
         .prepare(
           "SELECT * FROM investigation_steps WHERE run_id = ? ORDER BY id ASC",
         )
-        .all(run.id) as StepRow[])
+        .all(run.id)) as StepRow[])
     : [];
 
   return { run: run ?? null, steps };
 }
 
-export function hasCompletedInvestigation(incidentId: string): boolean {
+export async function hasCompletedInvestigation(incidentId: string): Promise<boolean> {
   return Boolean(
-    db()
+    await db()
       .prepare(
         "SELECT 1 FROM investigation_runs WHERE incident_id = ? AND status = 'completed' LIMIT 1",
       )
@@ -97,7 +97,7 @@ export async function runInvestigation(
   opts: { onStep?: (step: EngineStep) => void; initiatedBy?: string } = {},
 ): Promise<EngineResult> {
   const d = db();
-  const incident = getIncident(incidentId);
+  const incident = await getIncident(incidentId);
   if (!incident) throw new InvestigationError("Incident not found.");
   if (incident.status === "resolved") {
     throw new InvestigationError("Resolved incidents cannot be re-investigated.");
@@ -106,7 +106,7 @@ export async function runInvestigation(
   const provider = getInfrastructureProvider();
   const providerName = provider.name;
   const startedAt = nowIso();
-  const runResult = d
+  const runResult = await d
     .prepare(
       `INSERT INTO investigation_runs (incident_id, status, agent, provider, prompt_version, initiated_by, started_at, workspace_id)
        VALUES (?, 'running', ?, ?, ?, ?, ?, ?)`,
@@ -122,7 +122,7 @@ export async function runInvestigation(
     );
   const runId = Number(runResult.lastInsertRowid);
 
-  addEventOnce(
+  await addEventOnce(
     incidentId,
     runId,
     "investigation_started",
@@ -145,22 +145,28 @@ export async function runInvestigation(
       updated_at = excluded.updated_at
   `);
 
-  const handleStep = (step: EngineStep) => {
-    const at = nowIso();
-    upsertStep.run({
-      run_id: runId,
-      step_id: step.id,
-      label: step.label,
-      detail: step.detail,
-      status: step.status,
-      phase: step.phase,
-      source: step.source,
-      completed_at: step.completedAt,
-      updated_at: at,
-    });
-    const eventType = STEP_TO_EVENT[step.id];
-    if (step.status === "done" && eventType) {
-      addEventOnce(incidentId, runId, eventType, step.label, step.detail, DEFAULT_AGENT_NAME, at);
+  // The engine invokes onStep synchronously, so persistence is fire-and-forget;
+  // the run record itself is only finalized after the engine completes.
+  const handleStep = async (step: EngineStep) => {
+    try {
+      const at = nowIso();
+      await upsertStep.run({
+        run_id: runId,
+        step_id: step.id,
+        label: step.label,
+        detail: step.detail,
+        status: step.status,
+        phase: step.phase,
+        source: step.source,
+        completed_at: step.completedAt,
+        updated_at: at,
+      });
+      const eventType = STEP_TO_EVENT[step.id];
+      if (step.status === "done" && eventType) {
+        await addEventOnce(incidentId, runId, eventType, step.label, step.detail, DEFAULT_AGENT_NAME, at);
+      }
+    } catch (error) {
+      investigationLogger.error("failed to persist investigation step", { runId, error });
     }
     opts.onStep?.(step);
   };
@@ -176,10 +182,12 @@ export async function runInvestigation(
   } catch (error) {
     const message = providerErrorMessage(error);
     const finishedAt = nowIso();
-    d.prepare(
-      "UPDATE investigation_runs SET status = 'failed', finished_at = ?, error = ? WHERE id = ?",
-    ).run(finishedAt, message, runId);
-    addEventOnce(
+    await d
+      .prepare(
+        "UPDATE investigation_runs SET status = 'failed', finished_at = ?, error = ? WHERE id = ?",
+      )
+      .run(finishedAt, message, runId);
+    await addEventOnce(
       incidentId,
       runId,
       "note",
@@ -193,20 +201,26 @@ export async function runInvestigation(
   }
 
   const finishedAt = nowIso();
-  d.transaction(() => {
-    d.prepare(
-      "UPDATE investigation_runs SET status = 'completed', finished_at = ?, prompt_version = 'engine-1', result = ? WHERE id = ?",
-    ).run(finishedAt, JSON.stringify(result), runId);
+  await d.transaction(async () => {
+    await d
+      .prepare(
+        "UPDATE investigation_runs SET status = 'completed', finished_at = ?, prompt_version = 'engine-1', result = ? WHERE id = ?",
+      )
+      .run(finishedAt, JSON.stringify(result), runId);
 
-    d.prepare("DELETE FROM evidence_relationships WHERE evidence_id IN (SELECT id FROM evidence WHERE incident_id = ?)").run(incidentId);
-    d.prepare("DELETE FROM evidence WHERE incident_id = ?").run(incidentId);
+    await d
+      .prepare(
+        "DELETE FROM evidence_relationships WHERE evidence_id IN (SELECT id FROM evidence WHERE incident_id = ?)",
+      )
+      .run(incidentId);
+    await d.prepare("DELETE FROM evidence WHERE incident_id = ?").run(incidentId);
     const insertEvidence = d.prepare(`
       INSERT INTO evidence (incident_id, run_id, source, source_type, title, observation, relevance, confidence, timestamp, service, environment, data)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
     `);
     const dbIds: number[] = [];
     for (const e of result.evidence) {
-      const r = insertEvidence.run(
+      const r = await insertEvidence.run(
         incidentId,
         runId,
         e.source,
@@ -230,18 +244,20 @@ export async function runInvestigation(
       const fromId = dbIds[rel.from];
       const toId = dbIds[rel.to];
       if (fromId === undefined || toId === undefined) continue;
-      insertRelationship.run(fromId, toId, rel.relationship, rel.reason);
+      await insertRelationship.run(fromId, toId, rel.relationship, rel.reason);
     }
 
-    d.prepare("DELETE FROM hypotheses WHERE incident_id = ?").run(incidentId);
+    await d.prepare("DELETE FROM hypotheses WHERE incident_id = ?").run(incidentId);
     const insertHypothesis = d.prepare(`
       INSERT INTO hypotheses (incident_id, run_id, title, description, confidence, is_selected, supporting_evidence, contradicting_evidence, missing_evidence, next_step, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    result.hypotheses.forEach((h, i) => {
+    for (const [i, h] of result.hypotheses.entries()) {
       const toDbIds = (indices: number[]) =>
-        JSON.stringify(indices.map((idx) => dbIds[idx]).filter((id): id is number => id !== undefined));
-      insertHypothesis.run(
+        JSON.stringify(
+          indices.map((idx) => dbIds[idx]).filter((id): id is number => id !== undefined),
+        );
+      await insertHypothesis.run(
         incidentId,
         runId,
         h.title,
@@ -254,11 +270,11 @@ export async function runInvestigation(
         h.suggestedNextStep,
         finishedAt,
       );
-    });
-  })();
+    }
+  });
 
-  updateIncidentStatus(incidentId, "investigating");
-  addEventOnce(
+  await updateIncidentStatus(incidentId, "investigating");
+  await addEventOnce(
     incidentId,
     runId,
     "evidence_correlated",
@@ -267,7 +283,7 @@ export async function runInvestigation(
     DEFAULT_AGENT_NAME,
     finishedAt,
   );
-  addEventOnce(
+  await addEventOnce(
     incidentId,
     runId,
     "hypothesis_generated",

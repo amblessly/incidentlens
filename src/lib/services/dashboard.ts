@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { db, type Database } from "@/lib/db";
 import { isDemoMode } from "@/lib/config";
 import { listIncidents } from "@/lib/services/incidents";
 import type { Deployment, IncidentStatus, Severity } from "@/lib/types";
@@ -41,21 +41,21 @@ export interface DashboardData {
   >;
   mttrMinutes: number | null;
   mttiMinutes: number | null;
-  recentIncidents: ReturnType<typeof listIncidents>;
+  recentIncidents: Awaited<ReturnType<typeof listIncidents>>;
   serviceHealth: ServiceHealth[];
   recentDeployments: Deployment[];
   activity: ActivityRow[];
   incidentsByDay: DayBuckets[];
 }
 
-export function getDashboardData(): DashboardData {
+export async function getDashboardData(): Promise<DashboardData> {
   const d = db();
   const demoFilter = DEMO_FILTER;
   const demoFilterNoAlias = DEMO_FILTER_NO_ALIAS;
 
-  const statusCounts = d
+  const statusCounts = (await d
     .prepare(`SELECT status, COUNT(*) AS n FROM incidents i WHERE 1=1${demoFilter} GROUP BY status`)
-    .all() as { status: IncidentStatus; n: number }[];
+    .all()) as { status: IncidentStatus; n: number }[];
   const countFor = (s: IncidentStatus) =>
     statusCounts.find((r) => r.status === s)?.n ?? 0;
 
@@ -64,23 +64,23 @@ export function getDashboardData(): DashboardData {
     0,
   );
 
-  const mttr = d
+  const mttr = (await d
     .prepare(
       `SELECT AVG((julianday(resolved_at) - julianday(started_at)) * 1440) AS avg FROM incidents WHERE resolved_at IS NOT NULL${demoFilterNoAlias}`,
     )
-    .get() as { avg: number | null };
+    .get()) as { avg: number | null };
 
-  const mtti = d
+  const mtti = (await d
     .prepare(
       `SELECT AVG((julianday(r.finished_at) - julianday(r.started_at)) * 1440) AS avg
        FROM investigation_runs r
        WHERE r.status = 'completed' AND r.finished_at IS NOT NULL`,
     )
-    .get() as { avg: number | null };
+    .get()) as { avg: number | null };
 
-  const recentIncidents = listIncidents().slice(0, 6);
+  const recentIncidents = (await listIncidents()).slice(0, 6);
 
-  const serviceRows = d
+  const serviceRows = (await d
     .prepare(
       `SELECT s.name, s.team, s.kind,
               SUM(CASE WHEN i.status != 'resolved' THEN 1 ELSE 0 END) AS open_count,
@@ -90,7 +90,7 @@ export function getDashboardData(): DashboardData {
        GROUP BY s.id
        ORDER BY s.name ASC`,
     )
-    .all() as {
+    .all()) as {
     name: string;
     team: string;
     kind: string;
@@ -98,30 +98,31 @@ export function getDashboardData(): DashboardData {
     resolved_count: number | null;
   }[];
 
-  const serviceHealth: ServiceHealth[] = serviceRows.map((s) => {
+  const serviceHealth: ServiceHealth[] = [];
+  for (const s of serviceRows) {
     const openCount = s.open_count ?? 0;
-    const hasSev1 = d
+    const hasSev1 = (await d
       .prepare(
         `SELECT COUNT(*) AS n FROM incidents WHERE service = ? AND status != 'resolved' AND severity = 'SEV-1'${demoFilterNoAlias}`,
       )
-      .get(s.name) as { n: number };
+      .get(s.name)) as { n: number };
     const status: ServiceHealthStatus =
       openCount === 0 ? "healthy" : openCount === 1 && hasSev1.n === 0 ? "warning" : "critical";
-    return {
+    serviceHealth.push({
       name: s.name,
       team: s.team,
       kind: s.kind,
       status,
       openCount,
       resolvedCount: s.resolved_count ?? 0,
-    };
-  });
+    });
+  }
 
-  const recentDeployments = d
+  const recentDeployments = (await d
     .prepare("SELECT * FROM deployments ORDER BY deployed_at DESC LIMIT 6")
-    .all() as Deployment[];
+    .all()) as Deployment[];
 
-  const activity = d
+  const activity = (await d
     .prepare(
       `SELECT e.incident_id, i.title AS incident_title, e.type, e.title, e.created_at
        FROM incident_events e
@@ -130,9 +131,9 @@ export function getDashboardData(): DashboardData {
        ORDER BY e.created_at DESC
        LIMIT 8`,
     )
-    .all() as ActivityRow[];
+    .all()) as ActivityRow[];
 
-  const incidentsByDay = buildDayBuckets(d);
+  const incidentsByDay = await buildDayBuckets(d);
 
   return {
     counts: {
@@ -153,7 +154,7 @@ export function getDashboardData(): DashboardData {
   };
 }
 
-function buildDayBuckets(d: ReturnType<typeof db>): DayBuckets[] {
+async function buildDayBuckets(d: Database): Promise<DayBuckets[]> {
   const days: DayBuckets[] = [];
   const now = new Date();
   for (let i = 13; i >= 0; i--) {
@@ -168,9 +169,9 @@ function buildDayBuckets(d: ReturnType<typeof db>): DayBuckets[] {
     });
   }
 
-  const rows = d
+  const rows = (await d
     .prepare(`SELECT started_at, severity FROM incidents WHERE 1=1${DEMO_FILTER_NO_ALIAS}`)
-    .all() as { started_at: string; severity: Severity }[];
+    .all()) as { started_at: string; severity: Severity }[];
 
   const dayIndex = new Map(days.map((d2, i) => [d2.date, i]));
   for (const row of rows) {

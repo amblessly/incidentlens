@@ -18,7 +18,7 @@ function str(v: string | string[] | undefined): string | undefined {
 export default async function IncidentsPage(props: PageProps<"/incidents">) {
   const searchParams = await props.searchParams;
 
-  const incidents = listIncidents({
+  const incidents = await listIncidents({
     severity: str(searchParams.severity),
     status: str(searchParams.status),
     service: str(searchParams.service),

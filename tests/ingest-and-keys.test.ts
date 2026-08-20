@@ -7,64 +7,64 @@ import { createApiKey, verifyApiKey, revokeApiKey, rotateApiKey, listApiKeys, ha
 const workspaceId = "ws-test";
 const workspace2Id = "ws-other";
 
-beforeAll(() => {
+beforeAll(async () => {
   const now = new Date().toISOString();
-  db()
+  await db()
     .prepare("INSERT INTO workspaces (id, name, slug, created_at) VALUES (?, ?, ?, ?)")
     .run(workspaceId, "Test workspace", "test-workspace", now);
-  db()
+  await db()
     .prepare("INSERT INTO workspaces (id, name, slug, created_at) VALUES (?, ?, ?, ?)")
     .run(workspace2Id, "Other workspace", "other-workspace", now);
 });
 
-afterAll(() => {
-  db().prepare("DELETE FROM api_keys WHERE workspace_id IN (?, ?)").run(workspaceId, workspace2Id);
-  db().prepare("DELETE FROM workspaces WHERE id IN (?, ?)").run(workspaceId, workspace2Id);
+afterAll(async () => {
+  await db().prepare("DELETE FROM api_keys WHERE workspace_id IN (?, ?)").run(workspaceId, workspace2Id);
+  await db().prepare("DELETE FROM workspaces WHERE id IN (?, ?)").run(workspaceId, workspace2Id);
 });
 
 describe("API keys", () => {
-  it("creates a key whose raw secret is returned exactly once", () => {
-    const { row, secret } = createApiKey(workspaceId, "test key");
+  it("creates a key whose raw secret is returned exactly once", async () => {
+    const { row, secret } = await createApiKey(workspaceId, "test key");
     expect(row.key_prefix).toMatch(/^il_[0-9a-f]{8}$/);
     expect(secret).toMatch(/^il_[0-9a-f]{8}_[A-Za-z0-9_-]{32,}$/);
   });
 
-  it("never stores the raw key — only its hash", () => {
-    const { row, secret } = createApiKey(workspaceId, "hash test");
-    const stored = db()
+  it("never stores the raw key — only its hash", async () => {
+    const { row, secret } = await createApiKey(workspaceId, "hash test");
+    const stored = (await db()
       .prepare("SELECT key_hash FROM api_keys WHERE id = ?")
-      .get(row.id) as { key_hash: string };
+      .get(row.id)) as { key_hash: string };
     expect(stored.key_hash).toBe(hashApiKey(secret));
     expect(stored.key_hash).not.toContain(secret.slice(0, 8));
   });
 
-  it("verifies a valid key", () => {
-    const { secret } = createApiKey(workspaceId, "verify test");
-    const key = verifyApiKey(secret);
+  it("verifies a valid key", async () => {
+    const { secret } = await createApiKey(workspaceId, "verify test");
+    const key = await verifyApiKey(secret);
     expect(key?.name).toBe("verify test");
     expect(key?.last_used_at).not.toBeNull();
   });
 
-  it("rejects revoked keys", () => {
-    const { row, secret } = createApiKey(workspaceId, "revoke test");
-    revokeApiKey(row.id);
-    expect(verifyApiKey(secret)).toBeNull();
+  it("rejects revoked keys", async () => {
+    const { row, secret } = await createApiKey(workspaceId, "revoke test");
+    await revokeApiKey(row.id);
+    expect(await verifyApiKey(secret)).toBeNull();
   });
 
-  it("rotation revokes the old key and issues a new one", () => {
-    const { row, secret } = createApiKey(workspaceId, "rotate test");
-    const rotated = rotateApiKey(row.id);
+  it("rotation revokes the old key and issues a new one", async () => {
+    const { row, secret } = await createApiKey(workspaceId, "rotate test");
+    const rotated = await rotateApiKey(row.id);
     expect(rotated).not.toBeNull();
     expect(rotated!.secret).not.toBe(secret);
-    expect(verifyApiKey(secret)).toBeNull();
-    expect(verifyApiKey(rotated!.secret)?.id).toBe(rotated!.row.id);
+    expect(await verifyApiKey(secret)).toBeNull();
+    expect((await verifyApiKey(rotated!.secret))?.id).toBe(rotated!.row.id);
   });
 
-  it("lists only keys of the workspace", () => {
-    const before = listApiKeys(workspaceId).length;
-    createApiKey(workspaceId, "list test");
-    createApiKey("ws-other", "other workspace key");
-    expect(listApiKeys(workspaceId).length).toBe(before + 1);
+  it("lists only keys of the workspace", async () => {
+    const before = (await listApiKeys(workspaceId)).length;
+    await createApiKey(workspaceId, "list test");
+    await createApiKey("ws-other", "other workspace key");
+    expect((await listApiKeys(workspaceId)).length).toBe(before + 1);
   });
 });
 

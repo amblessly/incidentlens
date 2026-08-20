@@ -41,39 +41,39 @@ export interface ProviderConnectionRow {
   created_at: string;
 }
 
-export function createWorkspace(name: string): WorkspaceRow {
+export async function createWorkspace(name: string): Promise<WorkspaceRow> {
   const id = `ws_${randomUUID().slice(0, 12)}`;
   const slug = `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "workspace"}-${id.slice(3, 7)}`;
-  db()
+  await db()
     .prepare("INSERT INTO workspaces (id, name, slug, created_at) VALUES (?, ?, ?, ?)")
     .run(id, name, slug, nowIso());
-  return db().prepare("SELECT * FROM workspaces WHERE id = ?").get(id) as WorkspaceRow;
+  return (await db().prepare("SELECT * FROM workspaces WHERE id = ?").get(id)) as WorkspaceRow;
 }
 
-export function createEnvironment(
+export async function createEnvironment(
   workspaceId: string,
   name: string,
   kind = "production",
-): EnvironmentRow {
+): Promise<EnvironmentRow> {
   const id = `env_${randomUUID().slice(0, 12)}`;
-  db()
+  await db()
     .prepare(
       "INSERT INTO environments (id, workspace_id, name, kind, created_at) VALUES (?, ?, ?, ?, ?)",
     )
     .run(id, workspaceId, name, kind, nowIso());
-  return db().prepare("SELECT * FROM environments WHERE id = ?").get(id) as EnvironmentRow;
+  return (await db().prepare("SELECT * FROM environments WHERE id = ?").get(id)) as EnvironmentRow;
 }
 
-export function createProviderConnection(
+export async function createProviderConnection(
   workspaceId: string,
   opts: {
     environmentId?: string | null;
     providerType: string;
     name?: string;
   },
-): ProviderConnectionRow {
+): Promise<ProviderConnectionRow> {
   const id = `conn_${randomUUID().slice(0, 12)}`;
-  db()
+  await db()
     .prepare(
       `INSERT INTO provider_connections (id, workspace_id, environment_id, provider_type, name, status, created_at)
        VALUES (?, ?, ?, ?, ?, 'disconnected', ?)`,
@@ -86,51 +86,53 @@ export function createProviderConnection(
       opts.name ?? `${opts.providerType} connection`,
       nowIso(),
     );
-  return db().prepare("SELECT * FROM provider_connections WHERE id = ?").get(id) as ProviderConnectionRow;
+  return (await db()
+    .prepare("SELECT * FROM provider_connections WHERE id = ?")
+    .get(id)) as ProviderConnectionRow;
 }
 
-export function listWorkspaces(): WorkspaceRow[] {
-  return db().prepare("SELECT * FROM workspaces ORDER BY created_at ASC").all() as WorkspaceRow[];
+export async function listWorkspaces(): Promise<WorkspaceRow[]> {
+  return (await db().prepare("SELECT * FROM workspaces ORDER BY created_at ASC").all()) as WorkspaceRow[];
 }
 
-export function listEnvironments(workspaceId: string): EnvironmentRow[] {
-  return db()
+export async function listEnvironments(workspaceId: string): Promise<EnvironmentRow[]> {
+  return (await db()
     .prepare("SELECT * FROM environments WHERE workspace_id = ? ORDER BY created_at ASC")
-    .all(workspaceId) as EnvironmentRow[];
+    .all(workspaceId)) as EnvironmentRow[];
 }
 
-export function listConnections(workspaceId: string): ProviderConnectionRow[] {
-  return db()
+export async function listConnections(workspaceId: string): Promise<ProviderConnectionRow[]> {
+  return (await db()
     .prepare("SELECT * FROM provider_connections WHERE workspace_id = ? ORDER BY created_at ASC")
-    .all(workspaceId) as ProviderConnectionRow[];
+    .all(workspaceId)) as ProviderConnectionRow[];
 }
 
-export function getConnection(id: string): ProviderConnectionRow | null {
+export async function getConnection(id: string): Promise<ProviderConnectionRow | null> {
   return (
-    (db().prepare("SELECT * FROM provider_connections WHERE id = ?").get(id) as
+    ((await db().prepare("SELECT * FROM provider_connections WHERE id = ?").get(id)) as
       | ProviderConnectionRow
       | undefined) ?? null
   );
 }
 
-export function updateConnectionStatus(
+export async function updateConnectionStatus(
   id: string,
   status: ConnectionStatus,
   opts: { error?: string | null; testedAt?: string } = {},
-): void {
-  db()
+): Promise<void> {
+  await db()
     .prepare(
       "UPDATE provider_connections SET status = ?, last_error = ?, last_tested_at = ? WHERE id = ?",
     )
     .run(status, opts.error ?? null, opts.testedAt ?? nowIso(), id);
 }
 
-export function deleteConnection(id: string): boolean {
-  const result = db().prepare("DELETE FROM provider_connections WHERE id = ?").run(id);
+export async function deleteConnection(id: string): Promise<boolean> {
+  const result = await db().prepare("DELETE FROM provider_connections WHERE id = ?").run(id);
   return result.changes > 0;
 }
 
 /** The first workspace (setup flow), or null when none exist. */
-export function defaultWorkspace(): WorkspaceRow | null {
-  return listWorkspaces()[0] ?? null;
+export async function defaultWorkspace(): Promise<WorkspaceRow | null> {
+  return (await listWorkspaces())[0] ?? null;
 }

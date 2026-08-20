@@ -6,32 +6,34 @@ import { db } from "@/lib/db";
 import { IncidentLensError } from "@/lib/errors";
 
 /** Number of users with a usable password — drives the first-run setup gate. */
-export function needsSetup(): boolean {
-  const row = db()
+export async function needsSetup(): Promise<boolean> {
+  const row = (await db()
     .prepare("SELECT COUNT(*) AS n FROM users WHERE password_hash IS NOT NULL")
-    .get() as { n: number };
+    .get()) as { n: number };
   return row.n === 0;
 }
 
-export function getUserById(id: string): CurrentUser | null {
-  const row = db()
+export async function getUserById(id: string): Promise<CurrentUser | null> {
+  const row = (await db()
     .prepare("SELECT id, name, email, role, workspace_id FROM users WHERE id = ?")
-    .get(id) as { id: string; name: string; email: string; role: string; workspace_id: string | null } | undefined;
+    .get(id)) as { id: string; name: string; email: string; role: string; workspace_id: string | null } | undefined;
   return row ? toCurrentUser(row) : null;
 }
 
-export function getUserByEmail(email: string): {
+export interface UserAuthRow {
   id: string;
   name: string;
   email: string;
   role: string;
   workspace_id: string | null;
   password_hash: string | null;
-} | null {
+}
+
+export async function getUserByEmail(email: string): Promise<UserAuthRow | null> {
   return (
-    (db()
+    ((await db()
       .prepare("SELECT id, name, email, role, workspace_id, password_hash FROM users WHERE email = ?")
-      .get(email) as ReturnType<typeof getUserByEmail>) ?? null
+      .get(email)) as UserAuthRow | undefined) ?? null
   );
 }
 
@@ -48,7 +50,7 @@ export async function getCurrentUser(
   const session = verifySession(token);
   if (!session) return null;
 
-  const user = getUserById(session.userId);
+  const user = await getUserById(session.userId);
   if (!user) {
     throw new IncidentLensError("UNAUTHORIZED", "Session refers to a user that no longer exists.");
   }

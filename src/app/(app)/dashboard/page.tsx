@@ -19,8 +19,8 @@ function formatMinutes(m: number | null): string {
   return formatDuration(m * 60_000);
 }
 
-export default function DashboardPage() {
-  const data = getDashboardData();
+export default async function DashboardPage() {
+  const data = await getDashboardData();
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">

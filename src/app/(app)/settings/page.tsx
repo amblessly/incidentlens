@@ -22,16 +22,17 @@ export default async function SettingsPage() {
   const state = await appUiState();
   const isAdmin = state.user ? hasPermission(state.user.role, "settings.manage") : false;
 
-  const workspace = listWorkspaces()[0] ?? null;
-  const environments = workspace ? listEnvironments(workspace.id) : [];
+  const workspaces = await listWorkspaces();
+  const workspace = workspaces[0] ?? null;
+  const environments = workspace ? await listEnvironments(workspace.id) : [];
   const providerReady = providerAvailable();
 
   const database = db();
   const counts = {
-    incidents: (database.prepare("SELECT COUNT(*) AS n FROM incidents").get() as { n: number }).n,
-    users: (database.prepare("SELECT COUNT(*) AS n FROM users").get() as { n: number }).n,
-    investigationRuns: (database.prepare("SELECT COUNT(*) AS n FROM investigation_runs").get() as { n: number }).n,
-    plans: (database.prepare("SELECT COUNT(*) AS n FROM remediation_plans").get() as { n: number }).n,
+    incidents: ((await database.prepare("SELECT COUNT(*) AS n FROM incidents").get()) as { n: number }).n,
+    users: ((await database.prepare("SELECT COUNT(*) AS n FROM users").get()) as { n: number }).n,
+    investigationRuns: ((await database.prepare("SELECT COUNT(*) AS n FROM investigation_runs").get()) as { n: number }).n,
+    plans: ((await database.prepare("SELECT COUNT(*) AS n FROM remediation_plans").get()) as { n: number }).n,
   };
 
   return (

@@ -32,7 +32,7 @@ export async function GET(request: Request, ctx: RouteContext<"/api/incidents/[i
     try {
       const { id } = await ctx.params;
       await getUserForRequest(request);
-      const state = getInvestigationState(id);
+      const state = await getInvestigationState(id);
       if (!state.run) return apiError("No investigation has run for this incident.", 404, { request });
       return json(state, undefined, request);
     } catch (error) {
@@ -51,7 +51,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/incidents/[
       const initiatedBy = principal.kind === "session" ? principal.user.name : `API key ${principal.key.name}`;
       
       const result = await runInvestigation(id, { initiatedBy });
-      recordAudit({
+      await recordAudit({
         action: "investigation.run",
         detail: `Investigation run completed for incident ${id}.`,
         requestId: rid,

@@ -47,7 +47,7 @@ export async function appUiState(): Promise<UiState> {
             .join(""),
         }
       : null,
-    needsSetup: needsSetup(),
+    needsSetup: await needsSetup(),
   };
 }
 

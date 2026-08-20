@@ -100,10 +100,10 @@ export async function executePlan(
   incidentId: string,
   actor: { id: string; name: string },
 ): Promise<ExecutionOutcome> {
-  const incident = getIncident(incidentId);
+  const incident = await getIncident(incidentId);
   if (!incident) throw new ExecutionError("INVALID_REQUEST", "Incident not found.");
 
-  const plan = getPlan(incidentId);
+  const plan = await getPlan(incidentId);
   if (!plan) throw new ExecutionError("INVALID_REQUEST", "No remediation plan exists for this incident.");
   if (plan.status !== "approved") {
     throw new ExecutionError(
@@ -112,7 +112,7 @@ export async function executePlan(
     );
   }
 
-  const approval = activeApproval(plan.id);
+  const approval = await activeApproval(plan.id);
   if (!approval) {
     throw new ExecutionError(
       "EXECUTION_BLOCKED",
@@ -142,7 +142,7 @@ export async function executePlan(
   const provider = getExecutionProvider();
   const d = db();
   const startedAt = nowIso();
-  addEvent(
+  await addEvent(
     incidentId,
     "execution_started",
     "Execution started",
@@ -166,7 +166,7 @@ export async function executePlan(
     if (!op) {
       const message =
         "Action cannot be mapped to an allow-listed operation. Manual recovery required.";
-      insertExecution.run(
+      await insertExecution.run(
         executionId, incidentId, plan.id, action.id, actor.name, actor.id,
         "blocked", provider.providerType, null, message, at, at,
       );
@@ -178,7 +178,7 @@ export async function executePlan(
     try {
       const result = await provider.execute(op);
       const finished = nowIso();
-      insertExecution.run(
+      await insertExecution.run(
         executionId, incidentId, plan.id, action.id, actor.name, actor.id,
         result.status, provider.providerType, result.result, result.error ?? null, at, finished,
       );
@@ -186,7 +186,7 @@ export async function executePlan(
     } catch (error) {
       const message = providerErrorMessage(error);
       const finished = nowIso();
-      insertExecution.run(
+      await insertExecution.run(
         executionId, incidentId, plan.id, action.id, actor.name, actor.id,
         "failed", provider.providerType, null, message, at, finished,
       );
@@ -201,30 +201,34 @@ export async function executePlan(
   const finishedAt = nowIso();
 
   if (blocked === 0 && failed === 0) {
-    d.prepare(
-      "UPDATE remediation_plans SET status = 'executed', executed_at = ?, executed_by = ?, execution_result = ? WHERE id = ?",
-    ).run(
-      finishedAt,
-      actor.name,
-      `Plan #${plan.id} executed: ${succeeded} action(s) applied via ${provider.providerName}.`,
-      plan.id,
-    );
-    addEvent(incidentId, "execution_result", "Execution result", `All ${succeeded} action(s) succeeded.`, actor.name, finishedAt);
-    addEvent(incidentId, "remediation_executed", "Remediation executed", "Approved remediation applied.", actor.name, finishedAt);
-    updateIncidentStatus(incidentId, "resolved", { resolvedAt: finishedAt });
-    addEvent(incidentId, "incident_resolved", "Incident resolved", "All approved actions completed.", actor.name, finishedAt);
+    await d
+      .prepare(
+        "UPDATE remediation_plans SET status = 'executed', executed_at = ?, executed_by = ?, execution_result = ? WHERE id = ?",
+      )
+      .run(
+        finishedAt,
+        actor.name,
+        `Plan #${plan.id} executed: ${succeeded} action(s) applied via ${provider.providerName}.`,
+        plan.id,
+      );
+    await addEvent(incidentId, "execution_result", "Execution result", `All ${succeeded} action(s) succeeded.`, actor.name, finishedAt);
+    await addEvent(incidentId, "remediation_executed", "Remediation executed", "Approved remediation applied.", actor.name, finishedAt);
+    await updateIncidentStatus(incidentId, "resolved", { resolvedAt: finishedAt });
+    await addEvent(incidentId, "incident_resolved", "Incident resolved", "All approved actions completed.", actor.name, finishedAt);
   } else {
-    d.prepare(
-      "UPDATE remediation_plans SET execution_result = ? WHERE id = ?",
-    ).run(
-      `Plan #${plan.id}: ${succeeded} succeeded, ${failed} failed, ${blocked} blocked. Plan remains approved — resolve failures before retrying.`,
-      plan.id,
-    );
-    addEvent(incidentId, "execution_result", "Execution result", `Partial execution: ${succeeded} succeeded, ${failed} failed, ${blocked} blocked.`, actor.name, finishedAt);
+    await d
+      .prepare(
+        "UPDATE remediation_plans SET execution_result = ? WHERE id = ?",
+      )
+      .run(
+        `Plan #${plan.id}: ${succeeded} succeeded, ${failed} failed, ${blocked} blocked. Plan remains approved — resolve failures before retrying.`,
+        plan.id,
+      );
+    await addEvent(incidentId, "execution_result", "Execution result", `Partial execution: ${succeeded} succeeded, ${failed} failed, ${blocked} blocked.`, actor.name, finishedAt);
   }
 
   return {
-    plan: getPlan(incidentId) as PlanWithActions,
+    plan: (await getPlan(incidentId)) as PlanWithActions,
     executions: outcomes.length,
     succeeded,
     failed,
@@ -236,14 +240,14 @@ export async function executePlan(
  * Records a rollback for an executed plan and reopens the incident for
  * continued investigation. Rollback strategies come from the plan actions.
  */
-export function rollbackPlan(
+export async function rollbackPlan(
   incidentId: string,
   actor: { id: string; name: string },
-): PlanWithActions {
-  const incident = getIncident(incidentId);
+): Promise<PlanWithActions> {
+  const incident = await getIncident(incidentId);
   if (!incident) throw new ExecutionError("INVALID_REQUEST", "Incident not found.");
 
-  const plan = getPlan(incidentId);
+  const plan = await getPlan(incidentId);
   if (!plan) throw new ExecutionError("INVALID_REQUEST", "No remediation plan exists for this incident.");
   if (plan.status !== "executed") {
     throw new ExecutionError("EXECUTION_BLOCKED", "Only executed plans can be rolled back.");
@@ -258,12 +262,12 @@ export function rollbackPlan(
       ? `Rollback executed: ${strategies.join(" | ")}`
       : "Rollback result: no automated rollback defined — manual recovery required.";
 
-  db()
+  await db()
     .prepare("UPDATE remediation_plans SET rollback_result = ? WHERE id = ?")
     .run(summary, plan.id);
-  addEvent(incidentId, "rollback_result", "Rollback result", summary, actor.name, at);
-  updateIncidentStatus(incidentId, "investigating");
+  await addEvent(incidentId, "rollback_result", "Rollback result", summary, actor.name, at);
+  await updateIncidentStatus(incidentId, "investigating");
   executionLogger.info("plan rolled back", { incidentId, planId: plan.id, actor: actor.name });
 
-  return getPlan(incidentId) as PlanWithActions;
+  return (await getPlan(incidentId)) as PlanWithActions;
 }

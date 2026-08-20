@@ -17,13 +17,13 @@ export async function POST(request: Request) {
         return apiError(parsed.error.issues[0]?.message ?? "Invalid input.", 400, { request });
       }
 
-      const user = getUserByEmail(parsed.data.email.toLowerCase());
+      const user = await getUserByEmail(parsed.data.email.toLowerCase());
       if (!user || !user.password_hash || !verifyPassword(parsed.data.password, user.password_hash)) {
         return apiError("Invalid email or password.", 401, { code: "UNAUTHORIZED", request });
       }
 
       const token = createSessionToken(user.id);
-      recordAudit({
+      await recordAudit({
         action: "auth.login",
         detail: `User ${user.email} logged in.`,
         requestId: rid,

@@ -23,7 +23,7 @@ process.env.INCIDENTLENS_DB_PATH = join(DB_DIR, "test.db");
 
 afterAll(async () => {
   const { closeDb } = await import("@/lib/db");
-  closeDb();
+  await closeDb();
   try {
     rmSync(DB_DIR, { recursive: true, force: true });
   } catch {

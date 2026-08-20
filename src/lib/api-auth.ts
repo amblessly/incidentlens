@@ -50,7 +50,7 @@ export async function authenticateRequest(request: Request): Promise<ApiPrincipa
   const keyValue = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : header;
   if (!keyValue) return null;
 
-  const key = verifyApiKey(keyValue);
+  const key = await verifyApiKey(keyValue);
   if (!key) return null;
   return { kind: "api-key", key: { id: key.id, workspace_id: key.workspace_id, name: key.name } };
 }

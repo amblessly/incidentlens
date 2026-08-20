@@ -124,7 +124,7 @@ export interface PlanWithActions extends PlanRow {
   actions: ActionRow[];
 }
 
-export function listIncidents(filters: IncidentListFilters = {}): IncidentListItem[] {
+export async function listIncidents(filters: IncidentListFilters = {}): Promise<IncidentListItem[]> {
   const where: string[] = [];
   const params: Record<string, string> = {};
 
@@ -161,7 +161,10 @@ export function listIncidents(filters: IncidentListFilters = {}): IncidentListIt
     ORDER BY i.created_at DESC
   `;
 
-  const rows = db().prepare(sql).all(params) as Omit<IncidentListItem, "duration_minutes">[];
+  const rows = (await db().prepare(sql).all(params)) as Omit<
+    IncidentListItem,
+    "duration_minutes"
+  >[];
 
   return rows.map((row) => {
     const start = new Date(row.started_at).getTime();
@@ -173,70 +176,72 @@ export function listIncidents(filters: IncidentListFilters = {}): IncidentListIt
   });
 }
 
-export function getIncident(id: string): Incident | null {
-  const row = db()
-    .prepare("SELECT * FROM incidents WHERE id = ?")
-    .get(id) as Incident | undefined;
+export async function getIncident(id: string): Promise<Incident | null> {
+  const row = (await db().prepare("SELECT * FROM incidents WHERE id = ?").get(id)) as
+    | Incident
+    | undefined;
   if (!row) return null;
   if (!isDemoMode() && row.is_demo === 1) return null;
   return row;
 }
 
-export function getIncidentFull(id: string): IncidentFull | null {
-  const incident = getIncident(id);
+export async function getIncidentFull(id: string): Promise<IncidentFull | null> {
+  const incident = await getIncident(id);
   if (!incident) return null;
 
-  const events = db()
+  const d = db();
+
+  const events = (await d
     .prepare(
       "SELECT * FROM incident_events WHERE incident_id = ? ORDER BY created_at ASC, id ASC",
     )
-    .all(id) as IncidentEvent[];
+    .all(id)) as IncidentEvent[];
 
-  const evidence = db()
+  const evidence = (await d
     .prepare(
       "SELECT * FROM evidence WHERE incident_id = ? ORDER BY confidence DESC, timestamp ASC",
     )
-    .all(id) as EvidenceRow[];
+    .all(id)) as EvidenceRow[];
 
-  const hypotheses = db()
+  const hypotheses = (await d
     .prepare(
       "SELECT * FROM hypotheses WHERE incident_id = ? ORDER BY is_selected DESC, confidence DESC",
     )
-    .all(id) as HypothesisRow[];
+    .all(id)) as HypothesisRow[];
 
-  const runs = db()
+  const runs = (await d
     .prepare(
       "SELECT * FROM investigation_runs WHERE incident_id = ? ORDER BY started_at DESC",
     )
-    .all(id) as RunRow[];
+    .all(id)) as RunRow[];
 
-  const planRow = db()
+  const planRow = (await d
     .prepare("SELECT * FROM remediation_plans WHERE incident_id = ? ORDER BY created_at DESC LIMIT 1")
-    .get(id) as PlanRow | undefined;
+    .get(id)) as PlanRow | undefined;
 
   let plan: PlanWithActions | null = null;
   if (planRow) {
-    const actions = db()
+    const actions = (await d
       .prepare(
         "SELECT * FROM remediation_actions WHERE plan_id = ? ORDER BY order_index ASC",
       )
-      .all(planRow.id) as ActionRow[];
+      .all(planRow.id)) as ActionRow[];
     plan = { ...planRow, actions };
   }
 
-  const executions = db()
+  const executions = (await d
     .prepare(
       "SELECT * FROM executions WHERE incident_id = ? ORDER BY started_at ASC",
     )
-    .all(id) as ExecutionRow[];
+    .all(id)) as ExecutionRow[];
 
   return { ...incident, events, evidence, hypotheses, runs, plan, executions };
 }
 
-export function nextIncidentId(d: Database = db()): string {
-  const row = d
+export async function nextIncidentId(d: Database = db()): Promise<string> {
+  const row = (await d
     .prepare("SELECT MAX(CAST(SUBSTR(id, 5) AS INTEGER)) AS max_num FROM incidents")
-    .get() as { max_num: number | null };
+    .get()) as { max_num: number | null };
   const next = (row.max_num ?? 0) + 1;
   return `INC-${String(next).padStart(4, "0")}`;
 }
@@ -266,27 +271,27 @@ export interface CreateIncidentInput {
  * Returns an existing incident created with the same idempotency key, or
  * null when the key is new/absent.
  */
-export function findByIdempotencyKey(key: string | null): Incident | null {
+export async function findByIdempotencyKey(key: string | null): Promise<Incident | null> {
   if (!key) return null;
-  const row = db()
-    .prepare("SELECT * FROM incidents WHERE idempotency_key = ?")
-    .get(key) as Incident | undefined;
+  const row = (await db().prepare("SELECT * FROM incidents WHERE idempotency_key = ?").get(
+    key,
+  )) as Incident | undefined;
   return row ?? null;
 }
 
-export function createIncident(
+export async function createIncident(
   input: CreateIncidentInput,
   d: Database = db(),
-): Incident {
+): Promise<Incident> {
   // Idempotency: an incident created earlier with the same key is returned
   // instead of creating a duplicate. The API route surfaces this as a 200
   // with duplicate:true.
   if (input.idempotencyKey) {
-    const existing = findByIdempotencyKey(input.idempotencyKey);
+    const existing = await findByIdempotencyKey(input.idempotencyKey);
     if (existing) return existing;
   }
 
-  const id = nextIncidentId(d);
+  const id = await nextIncidentId(d);
   const now = nowIso();
 
   const insert = d.prepare(`
@@ -298,8 +303,8 @@ export function createIncident(
     VALUES (@incident_id, 'incident_created', 'Incident created', @description, @actor, @created_at)
   `);
 
-  d.transaction(() => {
-    insert.run({
+  await d.transaction(async () => {
+    await insert.run({
       id,
       title: input.title,
       service: input.service,
@@ -323,34 +328,36 @@ export function createIncident(
         return Object.keys(base).length > 0 ? JSON.stringify(base) : null;
       })(),
     });
-    insertEvent.run({
+    await insertEvent.run({
       incident_id: id,
       description: `Created from ${input.alertPayload ? "alert payload" : input.source ?? "manual entry"}.`,
       actor: input.actorName ?? null,
       created_at: now,
     });
     if (input.alertPayload) {
-      d.prepare(`
+      await d
+        .prepare(`
         INSERT INTO incident_events (incident_id, type, title, description, actor, created_at)
         VALUES (?, 'alert_received', 'Alert received', ?, NULL, ?)
-      `).run(id, input.alertPayload.slice(0, 500), now);
+      `)
+        .run(id, input.alertPayload.slice(0, 500), now);
     }
-  })();
+  });
 
-  return getIncident(id) as Incident;
+  return (await getIncident(id)) as Incident;
 }
 
-export function updateIncidentStatus(
+export async function updateIncidentStatus(
   id: string,
   status: Incident["status"],
   opts: { resolvedAt?: string | null } = {},
-): void {
-  db()
+): Promise<void> {
+  await db()
     .prepare("UPDATE incidents SET status = @status, resolved_at = @resolvedAt WHERE id = @id")
     .run({ id, status, resolvedAt: opts.resolvedAt ?? null });
 }
 
-export function addEvent(
+export async function addEvent(
   incidentId: string,
   type: IncidentEvent["type"],
   title: string,
@@ -358,8 +365,8 @@ export function addEvent(
   actor: string | null,
   at = nowIso(),
   runId: number | null = null,
-): void {
-  db()
+): Promise<void> {
+  await db()
     .prepare(`
       INSERT INTO incident_events (incident_id, run_id, type, title, description, actor, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -372,7 +379,7 @@ export function addEvent(
  * investigation-generated events so the same action can never be written to
  * the timeline twice (e.g. a step callback and the run completion handler).
  */
-export function addEventOnce(
+export async function addEventOnce(
   incidentId: string,
   runId: number,
   type: IncidentEvent["type"],
@@ -380,8 +387,8 @@ export function addEventOnce(
   description: string | null,
   actor: string | null,
   at = nowIso(),
-): void {
-  db()
+): Promise<void> {
+  await db()
     .prepare(`
       INSERT INTO incident_events (incident_id, run_id, type, title, description, actor, created_at)
       SELECT ?, ?, ?, ?, ?, ?, ?
@@ -402,9 +409,9 @@ export function addEventOnce(
  */
 export async function listServices(): Promise<string[]> {
   if (isDemoMode()) {
-    const rows = db()
-      .prepare("SELECT name FROM services ORDER BY name ASC")
-      .all() as { name: string }[];
+    const rows = (await db().prepare("SELECT name FROM services ORDER BY name ASC").all()) as {
+      name: string;
+    }[];
     return rows.map((r) => r.name);
   }
   try {
@@ -417,12 +424,10 @@ export async function listServices(): Promise<string[]> {
   }
 }
 
-export function getUserName(id: string | null): string | null {
+export async function getUserName(id: string | null): Promise<string | null> {
   if (!id) return null;
-  const row = db().prepare("SELECT name FROM users WHERE id = ?").get(id) as
+  const row = (await db().prepare("SELECT name FROM users WHERE id = ?").get(id)) as
     | { name: string }
     | undefined;
   return row?.name ?? null;
 }
-
-

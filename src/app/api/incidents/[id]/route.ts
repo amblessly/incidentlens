@@ -10,7 +10,7 @@ export async function GET(request: Request, ctx: RouteContext<"/api/incidents/[i
     try {
       const { id } = await ctx.params;
       await requireApiAuth(request);
-      const incident = getIncidentFull(id);
+      const incident = await getIncidentFull(id);
       if (!incident) return apiError("Incident not found.", 404, { request });
       return json({ incident }, undefined, request);
     } catch (error) {

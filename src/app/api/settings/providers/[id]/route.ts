@@ -17,15 +17,15 @@ export async function DELETE(request: Request, ctx: RouteContext<"/api/settings/
       }
 
       const { id } = await ctx.params;
-      const connection = getConnection(id);
+      const connection = await getConnection(id);
       if (!connection) {
         return apiError("Provider not found.", 404, { code: "PROVIDER_CONNECTION_NOT_FOUND", request });
       }
 
-      deleteConnection(id);
+      await deleteConnection(id);
       unregisterProvider(id);
 
-      recordAudit({
+      await recordAudit({
         action: "provider.deleted",
         detail: `Provider "${connection.name}" (${connection.provider_type}) deleted.`,
         requestId: rid,

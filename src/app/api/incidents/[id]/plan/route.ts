@@ -11,7 +11,7 @@ export async function GET(request: Request, ctx: RouteContext<"/api/incidents/[i
     try {
       const { id } = await ctx.params;
       await requireApiAuth(request);
-      const plan = getPlan(id);
+      const plan = await getPlan(id);
       if (!plan) return apiError("No remediation plan for this incident.", 404, { request });
       return json({ plan }, undefined, request);
     } catch (error) {
@@ -30,8 +30,8 @@ export async function POST(request: Request, ctx: RouteContext<"/api/incidents/[
         return apiError("Plan generation requires a session user.", 403, { code: "FORBIDDEN", request });
       }
 
-      const plan = generatePlan(id);
-      recordAudit({
+      const plan = await generatePlan(id);
+      await recordAudit({
         action: "plan.generate",
         detail: `Remediation plan #${plan.id} generated for incident ${id}.`,
         requestId: rid,

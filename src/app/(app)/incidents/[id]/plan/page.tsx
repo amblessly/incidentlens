@@ -15,11 +15,11 @@ export const metadata = {
 
 export default async function IncidentPlanPage(props: PageProps<"/incidents/[id]/plan">) {
   const { id } = await props.params;
-  const incident = getIncidentFull(id);
+  const incident = await getIncidentFull(id);
   if (!incident) notFound();
 
   const state = await appUiState();
-  recordPlanViewed(id, state.user?.name ?? "anonymous");
+  await recordPlanViewed(id, state.user?.name ?? "anonymous");
 
   const role = state.user?.role ?? "viewer";
   const permissions = {
@@ -36,7 +36,7 @@ export default async function IncidentPlanPage(props: PageProps<"/incidents/[id]
       <PlanReview
         incidentId={incident.id}
         incidentStatus={incident.status}
-        investigationCompleted={hasCompletedInvestigation(incident.id)}
+        investigationCompleted={await hasCompletedInvestigation(incident.id)}
         plan={incident.plan}
         permissions={permissions}
       />

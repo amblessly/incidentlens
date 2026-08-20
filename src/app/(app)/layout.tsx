@@ -17,19 +17,28 @@ export default async function AppLayout({ children }: Readonly<{ children: React
   // In demo mode, use a pre-created demo user (bypasses auth for hackathon demo)
   if (isDemoMode() && !state.user) {
     const { db } = await import("@/lib/db");
-    
+
     // Get or create demo user
     const demoEmail = "demo@incidentlens.dev";
-    let user = db().prepare("SELECT * FROM users WHERE email = ?").get(demoEmail) as { id: string; name: string; email: string; role: string; workspace_id: string } | undefined;
-    
+    const database = db();
+    let user = (await database
+      .prepare("SELECT * FROM users WHERE email = ?")
+      .get(demoEmail)) as
+      | { id: string; name: string; email: string; role: string; workspace_id: string }
+      | undefined;
+
     if (!user) {
       const demoUserId = "u-demo";
       const now = new Date().toISOString();
-      const workspace = db().prepare("SELECT * FROM workspaces LIMIT 1").get() as { id: string } | undefined;
+      const workspace = (await database.prepare("SELECT * FROM workspaces LIMIT 1").get()) as
+        | { id: string }
+        | undefined;
       if (workspace) {
-        db().prepare(
-          "INSERT OR IGNORE INTO users (id, name, email, password_hash, role, workspace_id, created_at) VALUES (?, ?, ?, ?, 'admin', ?, ?)"
-        ).run(demoUserId, "Demo User", demoEmail, "", workspace.id, now);
+        await database
+          .prepare(
+            "INSERT OR IGNORE INTO users (id, name, email, password_hash, role, workspace_id, created_at) VALUES (?, ?, ?, ?, 'admin', ?, ?)",
+          )
+          .run(demoUserId, "Demo User", demoEmail, "", workspace.id, now);
         user = { id: demoUserId, name: "Demo User", email: demoEmail, role: "admin", workspace_id: workspace.id };
       }
     }

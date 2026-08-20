@@ -17,7 +17,7 @@ export async function GET(request: Request) {
       if (!user.user.workspace_id) {
         return apiError("Your account is not attached to a workspace yet.", 409, { code: "NO_WORKSPACE", request });
       }
-      return json({ keys: listApiKeys(user.user.workspace_id) }, undefined, request);
+      return json({ keys: await listApiKeys(user.user.workspace_id) }, undefined, request);
     } catch (error) {
       return errorToResponse(error, request);
     }
@@ -41,11 +41,11 @@ export async function POST(request: Request) {
         return apiError(parsed.error.issues[0]?.message ?? "Invalid input.", 400, { request });
       }
 
-      const created = createApiKey(user.user.workspace_id, parsed.data.name, {
+      const created = await createApiKey(user.user.workspace_id, parsed.data.name, {
         expiresAt: parsed.data.expiresAt ?? null,
       });
 
-      recordAudit({
+      await recordAudit({
         action: "api_keys.create",
         detail: `API key "${parsed.data.name}" created.`,
         requestId: rid,

@@ -11,7 +11,7 @@ export async function GET(request: Request) {
       await requireApiAuth(request, "audit.view");
       const { searchParams } = new URL(request.url);
       const limit = Math.min(Number(searchParams.get("limit") ?? 100), 500);
-      return json({ events: listAuditEvents(limit) }, undefined, request);
+      return json({ events: await listAuditEvents(limit) }, undefined, request);
     } catch (error) {
       return errorToResponse(error, request);
     }

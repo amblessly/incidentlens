@@ -35,8 +35,8 @@ export interface AuditInput {
   executionId?: string | null;
 }
 
-export function recordAudit(input: AuditInput): void {
-  const row = db()
+export async function recordAudit(input: AuditInput): Promise<void> {
+  await db()
     .prepare(
       `INSERT INTO audit_events (request_id, user_id, user_name, workspace_id, incident_id, investigation_run_id, execution_id, action, detail, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -61,18 +61,17 @@ export function recordAudit(input: AuditInput): void {
     investigationRunId: input.investigationRunId ?? undefined,
     executionId: input.executionId ?? undefined,
   });
-  return row ? undefined : undefined;
 }
 
-export function listAuditEvents(limit = 200, incidentId?: string): AuditEventRow[] {
-  const rows = incidentId
-    ? (db()
-        .prepare(
-          "SELECT * FROM audit_events WHERE incident_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
-        )
-        .all(incidentId, limit) as AuditEventRow[])
-    : (db()
-        .prepare("SELECT * FROM audit_events ORDER BY created_at DESC, id DESC LIMIT ?")
-        .all(limit) as AuditEventRow[]);
-  return rows;
+export async function listAuditEvents(limit = 200, incidentId?: string): Promise<AuditEventRow[]> {
+  if (incidentId) {
+    return (await db()
+      .prepare(
+        "SELECT * FROM audit_events WHERE incident_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+      )
+      .all(incidentId, limit)) as AuditEventRow[];
+  }
+  return (await db()
+    .prepare("SELECT * FROM audit_events ORDER BY created_at DESC, id DESC LIMIT ?")
+    .all(limit)) as AuditEventRow[];
 }

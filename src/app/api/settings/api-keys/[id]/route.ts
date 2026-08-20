@@ -16,10 +16,10 @@ export async function DELETE(request: Request, ctx: RouteContext<"/api/settings/
         return apiError("API key management requires a session user.", 403, { code: "FORBIDDEN", request });
       }
       const { id } = await ctx.params;
-      const key = db().prepare("SELECT * FROM api_keys WHERE id = ? AND workspace_id = ?").get(id, user.user.workspace_id) as ApiKeyRow | undefined;
+      const key = (await db().prepare("SELECT * FROM api_keys WHERE id = ? AND workspace_id = ?").get(id, user.user.workspace_id)) as ApiKeyRow | undefined;
       if (!key) return apiError("API key not found.", 404, { request });
-      revokeApiKey(id);
-      recordAudit({
+      await revokeApiKey(id);
+      await recordAudit({
         action: "api_keys.revoke",
         detail: `API key "${key.name}" revoked.`,
         requestId: rid,
@@ -43,9 +43,9 @@ export async function POST(request: Request, ctx: RouteContext<"/api/settings/ap
         return apiError("API key management requires a session user.", 403, { code: "FORBIDDEN", request });
       }
       const { id } = await ctx.params;
-      const rotated = rotateApiKey(id);
+      const rotated = await rotateApiKey(id);
       if (!rotated) return apiError("API key not found.", 404, { request });
-      recordAudit({
+      await recordAudit({
         action: "api_keys.rotate",
         detail: `API key "${rotated.row.name}" rotated.`,
         requestId: rid,

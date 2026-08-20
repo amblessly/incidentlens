@@ -1,9 +1,22 @@
+import { createHash } from "node:crypto";
+
 import type { Database } from "@/lib/db";
 import { DEFAULT_AGENT_NAME, INVESTIGATOR_NAME } from "@/lib/constants";
 import { INVESTIGATION_PROMPT_VERSION } from "@/lib/clanker/prompts";
 import { hashPassword } from "@/lib/auth/password";
 import { buildScenarios, type DemoScenario } from "@/lib/demo/scenarios";
 import type { InvestigationResultData } from "@/lib/types";
+
+/**
+ * Deterministic demo ingestion key (demo mode only). The raw secret is known
+ * and documented so the API-key demo works out of the box on every backend.
+ */
+export const DEMO_API_KEY_SECRET = "il_9b85ef7647268f7f53308ce03badc353e0429e1f4389920d";
+export const DEMO_API_KEY_ID = "key_demo";
+
+function demoApiKeyHash(): string {
+  return createHash("sha256").update(DEMO_API_KEY_SECRET).digest("hex");
+}
 
 const USERS = [
   {
@@ -118,8 +131,8 @@ function severityAssessment(severity: string): string {
   }
 }
 
-export function seedIfEmpty(db: Database): void {
-  const count = db.prepare("SELECT COUNT(*) AS n FROM incidents").get() as { n: number };
+export async function seedIfEmpty(db: Database): Promise<void> {
+  const count = (await db.prepare("SELECT COUNT(*) AS n FROM incidents").get()) as { n: number };
   if (count.n > 0) return;
 
   const now = new Date();
@@ -136,6 +149,9 @@ export function seedIfEmpty(db: Database): void {
   );
   const insertConnection = db.prepare(
     "INSERT INTO provider_connections (id, workspace_id, environment_id, provider_type, name, status, last_tested_at, last_error, config, created_at) VALUES (@id, @workspace_id, @environment_id, @provider_type, @name, @status, @last_tested_at, @last_error, @config, @created_at)",
+  );
+  const insertApiKey = db.prepare(
+    "INSERT INTO api_keys (id, workspace_id, name, key_hash, key_prefix, created_at, revoked_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL) ON CONFLICT (id) DO NOTHING",
   );
   const insertService = db.prepare(
     "INSERT INTO services (id, name, team, kind, created_at) VALUES (@id, @name, @team, @kind, @created_at)",
@@ -173,13 +189,21 @@ export function seedIfEmpty(db: Database): void {
 
   const scenarios = buildScenarios(now);
 
-db.transaction(() => {
-    insertWorkspace.run({ ...DEMO_WORKSPACE, created_at: ago(60 * 24 * 30) });
-    insertEnvironment.run({ ...DEMO_ENVIRONMENT, created_at: ago(60 * 24 * 30) });
-    insertConnection.run({ ...DEMO_CONNECTION, created_at: ago(60 * 24 * 30) });
+  await db.transaction(async () => {
+    await insertWorkspace.run({ ...DEMO_WORKSPACE, created_at: ago(60 * 24 * 30) });
+    await insertEnvironment.run({ ...DEMO_ENVIRONMENT, created_at: ago(60 * 24 * 30) });
+    await insertConnection.run({ ...DEMO_CONNECTION, created_at: ago(60 * 24 * 30) });
+    await insertApiKey.run(
+      DEMO_API_KEY_ID,
+      DEMO_WORKSPACE.id,
+      "Demo ingestion key",
+      demoApiKeyHash(),
+      DEMO_API_KEY_SECRET.slice(0, 8),
+      ago(60 * 24 * 30),
+    );
 
     for (const u of USERS) {
-      insertUser.run({
+      await insertUser.run({
         id: u.id,
         name: u.name,
         email: u.email,
@@ -190,11 +214,11 @@ db.transaction(() => {
       });
     }
     for (const s of SERVICES) {
-      insertService.run({ ...s, created_at: ago(60 * 24 * 60) });
+      await insertService.run({ ...s, created_at: ago(60 * 24 * 60) });
     }
 
     for (const sc of scenarios) {
-      insertDeployment.run({
+      await insertDeployment.run({
         id: sc.deployment.id,
         service: sc.deployment.service,
         version: sc.deployment.version,
@@ -205,7 +229,7 @@ db.transaction(() => {
       });
     }
 
-    insertDeployment.run({
+    await insertDeployment.run({
       id: "DEP-9097",
       service: "worker-jobs",
       version: "v1.4.2",
@@ -214,7 +238,7 @@ db.transaction(() => {
       deployed_at: ago(7 * 60),
       status: "success",
     });
-    insertDeployment.run({
+    await insertDeployment.run({
       id: "DEP-9095",
       service: "auth-service",
       version: "v2.9.0",
@@ -223,7 +247,7 @@ db.transaction(() => {
       deployed_at: ago(23 * 60),
       status: "success",
     });
-    insertDeployment.run({
+    await insertDeployment.run({
       id: "DEP-9093",
       service: "cdn-edge",
       version: "edge-44",
@@ -232,7 +256,7 @@ db.transaction(() => {
       deployed_at: ago(41 * 60),
       status: "success",
     });
-    insertDeployment.run({
+    await insertDeployment.run({
       id: "DEP-9088",
       service: "web-frontend",
       version: "v5.1.0",
@@ -244,7 +268,7 @@ db.transaction(() => {
 
     for (const sc of scenarios) {
       const { incident } = sc;
-      insertIncident.run({
+      await insertIncident.run({
         id: incident.id,
         title: incident.title,
         service: incident.service,
@@ -264,7 +288,7 @@ db.transaction(() => {
       const hasInvestigation = sc.evidence.length > 0;
 
       for (const e of [...sc.events].sort((a, b) => a.atAgo - b.atAgo)) {
-        insertEvent.run({
+        await insertEvent.run({
           incident_id: incident.id,
           type: e.type,
           title: e.title,
@@ -279,7 +303,7 @@ db.transaction(() => {
       }
 
       for (const ev of sc.evidence) {
-        insertEvidence.run({
+        await insertEvidence.run({
           incident_id: incident.id,
           source: ev.source,
           title: ev.title,
@@ -292,7 +316,7 @@ db.transaction(() => {
       }
 
       for (const [i, h] of sc.hypotheses.entries()) {
-        insertHypothesis.run({
+        await insertHypothesis.run({
           incident_id: incident.id,
           title: h.title,
           description: h.description,
@@ -310,7 +334,7 @@ db.transaction(() => {
         const started = ago(incident.startedAgo - 1);
         const finished = ago(Math.min(incident.startedAgo - 12, ...sc.evidence.map((e) => e.atAgo)));
         const result = buildResult(sc);
-        const runResult = insertRun.run({
+        const runResult = await insertRun.run({
           incident_id: incident.id,
           status: "completed",
           agent: DEFAULT_AGENT_NAME,
@@ -337,17 +361,17 @@ db.transaction(() => {
           INSERT INTO investigation_steps (run_id, step_id, label, detail, status, phase, source, completed_at, updated_at)
           VALUES (?, ?, ?, ?, 'done', ?, ?, ?, ?)
         `);
-        stepDefs.forEach((s, i) => {
+        for (const [i, s] of stepDefs.entries()) {
           const completedAt = new Date(
             new Date(finished).getTime() - (stepDefs.length - 1 - i) * 30_000,
           ).toISOString();
-          insertStep.run(runId, s.id, s.label, s.detail, s.phase, s.source, completedAt, completedAt);
-        });
+          await insertStep.run(runId, s.id, s.label, s.detail, s.phase, s.source, completedAt, completedAt);
+        }
       }
 
       if (sc.plan) {
         const isExecuted = sc.plan.planStatus === "executed";
-        const planResult = insertPlan.run({
+        const planResult = await insertPlan.run({
           incident_id: incident.id,
           status: sc.plan.planStatus,
           summary: sc.plan.summary,
@@ -365,8 +389,8 @@ db.transaction(() => {
         });
         const planIdValue = Number(planResult.lastInsertRowid);
 
-        sc.plan.actions.forEach((a, i) => {
-          insertAction.run({
+        for (const [i, a] of sc.plan.actions.entries()) {
+          await insertAction.run({
             plan_id: planIdValue,
             order_index: i,
             description: a.description,
@@ -380,11 +404,10 @@ db.transaction(() => {
             blast_radius: a.blastRadius ?? null,
             prerequisites: a.prerequisites ? JSON.stringify(a.prerequisites) : null,
           });
-        });
+        }
       }
     }
-  })();
+  });
 
   console.log(`[incidentlens] seeded demo database with ${scenarios.length} incidents`);
 }
-

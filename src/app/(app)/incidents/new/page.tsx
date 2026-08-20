@@ -10,8 +10,9 @@ export const metadata = {
 
 export default async function NewIncidentPage() {
   const services = await listServices();
-  const workspace = listWorkspaces()[0] ?? null;
-  const providers = workspace ? listConnections(workspace.id) : [];
+  const workspaces = await listWorkspaces();
+  const workspace = workspaces[0] ?? null;
+  const providers = workspace ? await listConnections(workspace.id) : [];
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6">

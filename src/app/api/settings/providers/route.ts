@@ -21,7 +21,7 @@ export async function GET(request: Request) {
       if (!user.user.workspace_id) {
         return apiError("Your account is not attached to a workspace.", 409, { code: "NO_WORKSPACE", request });
       }
-      const connections = listConnections(user.user.workspace_id);
+      const connections = await listConnections(user.user.workspace_id);
       return json({ providers: connections }, undefined, request);
     } catch (error) {
       return errorToResponse(error, request);
@@ -55,21 +55,21 @@ export async function POST(request: Request) {
 
       const { randomUUID } = await import("node:crypto");
       const id = `conn_${randomUUID().slice(0, 12)}`;
-      db()
+      await db()
         .prepare(
           `INSERT INTO provider_connections (id, workspace_id, provider_type, name, status, config, created_at)
            VALUES (?, ?, ?, ?, 'disconnected', ?, ?)`,
         )
         .run(id, user.user.workspace_id, providerType, name, configJson, nowIso());
 
-      const conn = db().prepare("SELECT * FROM provider_connections WHERE id = ?").get(id) as import("@/lib/services/workspaces").ProviderConnectionRow;
+      const conn = (await db().prepare("SELECT * FROM provider_connections WHERE id = ?").get(id)) as import("@/lib/services/workspaces").ProviderConnectionRow;
 
       if (providerType === "generic" && configJson) {
         const provider = createGenericProviderFromConfig(conn.id, name, configJson);
         registerProvider(provider);
       }
 
-      recordAudit({
+      await recordAudit({
         action: "provider.created",
         detail: `Provider "${name}" (${providerType}) created.`,
         requestId: rid,

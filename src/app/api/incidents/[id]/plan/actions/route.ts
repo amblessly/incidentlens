@@ -51,26 +51,26 @@ export async function POST(request: Request, ctx: RouteContext<"/api/incidents/[
       switch (parsed.data.action) {
         case "approve": {
           requirePermission("approve");
-          result = approvePlan(id, actor);
-          recordAudit({ action: "plan.approve", detail: `Plan approved by ${user.user.name}`, requestId: rid, userId: user.user.id, userName: user.user.name, workspaceId: user.user.workspace_id, incidentId: id });
+          result = await approvePlan(id, actor);
+          await recordAudit({ action: "plan.approve", detail: `Plan approved by ${user.user.name}`, requestId: rid, userId: user.user.id, userName: user.user.name, workspaceId: user.user.workspace_id, incidentId: id });
           break;
         }
         case "reject": {
           requirePermission("reject");
-          result = rejectPlan(id, parsed.data.reason ?? "No reason provided.", user.user.name);
-          recordAudit({ action: "plan.reject", detail: `Plan rejected: ${parsed.data.reason ?? "no reason"}`, requestId: rid, userId: user.user.id, userName: user.user.name, workspaceId: user.user.workspace_id, incidentId: id });
+          result = await rejectPlan(id, parsed.data.reason ?? "No reason provided.", user.user.name);
+          await recordAudit({ action: "plan.reject", detail: `Plan rejected: ${parsed.data.reason ?? "no reason"}`, requestId: rid, userId: user.user.id, userName: user.user.name, workspaceId: user.user.workspace_id, incidentId: id });
           break;
         }
         case "execute": {
           requirePermission("execute");
           result = await executePlan(id, actor);
-          recordAudit({ action: "plan.execute", detail: `Plan executed by ${user.user.name}`, requestId: rid, userId: user.user.id, userName: user.user.name, workspaceId: user.user.workspace_id, incidentId: id });
+          await recordAudit({ action: "plan.execute", detail: `Plan executed by ${user.user.name}`, requestId: rid, userId: user.user.id, userName: user.user.name, workspaceId: user.user.workspace_id, incidentId: id });
           break;
         }
         case "rollback": {
           requirePermission("rollback");
-          result = rollbackPlan(id, actor);
-          recordAudit({ action: "plan.rollback", detail: `Plan rolled back by ${user.user.name}`, requestId: rid, userId: user.user.id, userName: user.user.name, workspaceId: user.user.workspace_id, incidentId: id });
+          result = await rollbackPlan(id, actor);
+          await recordAudit({ action: "plan.rollback", detail: `Plan rolled back by ${user.user.name}`, requestId: rid, userId: user.user.id, userName: user.user.name, workspaceId: user.user.workspace_id, incidentId: id });
           break;
         }
       }

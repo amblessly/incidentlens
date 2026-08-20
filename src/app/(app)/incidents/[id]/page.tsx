@@ -16,7 +16,7 @@ export const metadata = {
 
 export default async function IncidentDetailPage(props: PageProps<"/incidents/[id]">) {
   const { id } = await props.params;
-  const incident = getIncidentFull(id);
+  const incident = await getIncidentFull(id);
   if (!incident) notFound();
 
   return (
