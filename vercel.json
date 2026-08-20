@@ -3,7 +3,6 @@
   "devCommand": "npm run dev",
   "installCommand": "npm install",
   "framework": "nextjs",
-  "regions": ["sgp1"],
   "functions": {
     "src/app/**/*.ts": {
       "maxDuration": 60
