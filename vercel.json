@@ -7,10 +7,5 @@
     "src/app/**/*.ts": {
       "maxDuration": 60
     }
-  },
-  "env": {
-    "INCIDENTLENS_MODE": "demo",
-    "SESSION_SECRET": "@session-secret",
-    "DATABASE_URL": "@database-url"
   }
 }
